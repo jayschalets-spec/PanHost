@@ -1,0 +1,38 @@
+# Local full-stack stack: Postgres + backend API.
+# Run: docker compose up --build
+# Then run the frontend separately with: cd frontend && npm run dev
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: property_mgmt
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/property_mgmt
+      JWT_SECRET: local-dev-secret-change-me
+      NODE_ENV: production
+      PORT: '3001'
+    ports:
+      - '3001:3001'
+
+volumes:
+  pgdata:

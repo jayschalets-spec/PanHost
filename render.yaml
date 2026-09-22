@@ -1,0 +1,20 @@
+# Render.com blueprint for the PanHost backend API.
+# The schema auto-applies on boot, so you only need a Postgres connection string.
+services:
+  - type: web
+    name: panhost-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true # Render generates a strong secret automatically
+      - key: DATABASE_URL
+        sync: false # paste your Supabase/Postgres connection string
+      - key: PUBLIC_URL
+        sync: false # your Vercel frontend URL, e.g. https://panhost.vercel.app (for guest links)
