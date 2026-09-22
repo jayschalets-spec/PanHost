@@ -9,6 +9,7 @@ import { query, pool } from './db.js';
 import { parseICS, isRealReservation } from './ical.js';
 import { fetchAirbnbListing, extractListingId } from './scrape.js';
 import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
+import { sendEmail, emailTemplate, emailConfigured } from './email.js';
 
 dotenv.config();
 
@@ -102,6 +103,20 @@ app.post(
       [email.toLowerCase(), hash, name || null]
     );
     const user = rows[0];
+    // Welcome email (sends when SMTP configured; otherwise logged).
+    sendEmail({
+      userId: user.id,
+      to: user.email,
+      subject: 'Welcome to PanHost 🎉',
+      html: emailTemplate({
+        heading: `Welcome${user.name ? `, ${user.name.split(' ')[0]}` : ''}!`,
+        lines: [
+          'Your PanHost account is ready. You can now add listings, connect channels, and manage reservations from one dashboard.',
+          'Log in any time to get started.',
+        ],
+        cta: { label: 'Open PanHost', url: process.env.PUBLIC_URL || 'http://localhost:3000' },
+      }),
+    });
     res.status(201).json({ token: signToken(user), user });
   })
 );
@@ -1226,6 +1241,23 @@ app.post(
       'INSERT INTO team_members (user_id, name, email, phone, role) VALUES ($1,$2,$3,$4,$5) RETURNING *',
       [req.user.id, name, email || null, phone || null, role || 'cleaner']
     );
+    // Confirmation email to the new team member.
+    if (email) {
+      const owner = (await query('SELECT brand_name, company, name FROM users WHERE id = $1', [req.user.id])).rows[0] || {};
+      const brand = owner.brand_name || owner.company || 'PanHost';
+      sendEmail({
+        userId: req.user.id,
+        to: email,
+        subject: `You've been added to ${brand} on PanHost`,
+        html: emailTemplate({
+          heading: `Welcome to the team, ${name.split(' ')[0]}!`,
+          lines: [
+            `${owner.name || 'Your host'} added you to <strong>${brand}</strong> as <strong>${role || 'cleaner'}</strong>.`,
+            'You\'ll receive tasks and turnover assignments here. We\'ll be in touch with next steps.',
+          ],
+        }),
+      });
+    }
     res.status(201).json(rows[0]);
   })
 );
@@ -1262,6 +1294,41 @@ app.delete(
     const { rowCount } = await query('DELETE FROM team_members WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!rowCount) return res.status(404).json({ error: 'Team member not found' });
     res.json({ deleted: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Email — status + log + test send
+// ---------------------------------------------------------------------------
+app.get('/api/email/status', auth, (req, res) => res.json({ configured: emailConfigured }));
+
+app.get(
+  '/api/email-log',
+  auth,
+  wrap(async (req, res) => {
+    const { rows } = await query(
+      'SELECT recipient, subject, status, error, created_at FROM email_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [req.user.id]
+    );
+    res.json({ configured: emailConfigured, log: rows });
+  })
+);
+
+app.post(
+  '/api/email/test',
+  auth,
+  wrap(async (req, res) => {
+    const me = (await query('SELECT email, name FROM users WHERE id = $1', [req.user.id])).rows[0];
+    const r = await sendEmail({
+      userId: req.user.id,
+      to: me.email,
+      subject: 'PanHost test email ✅',
+      html: emailTemplate({
+        heading: 'It works!',
+        lines: ['This is a test email from PanHost. If you received it, your email delivery is configured correctly.'],
+      }),
+    });
+    res.json(r);
   })
 );
 

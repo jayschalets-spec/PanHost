@@ -302,6 +302,70 @@ function WebhookCard() {
   );
 }
 
+function EmailCard() {
+  const [data, setData] = useState(null);
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api.get('/api/email-log').then((r) => setData(r.data)).catch(() => {});
+  useEffect(() => {
+    load();
+  }, []);
+
+  const test = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const { data: r } = await api.post('/api/email/test');
+      setMsg(r.status === 'sent' ? '✅ Test email sent — check your inbox.' : 'ℹ️ Logged (add SMTP to deliver for real).');
+      await load();
+    } catch {
+      setMsg('⚠️ Failed to send test.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card-header">
+        <h3>✉️ Email notifications</h3>
+        <span className={`badge ${data?.configured ? 'confirmed' : 'pending'}`}>
+          {data?.configured ? 'SMTP connected' : 'Log-only (no SMTP)'}
+        </span>
+      </div>
+      <div className="card-body">
+        <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+          PanHost sends welcome emails to new accounts, confirmations to added team members, and can
+          email guests. To deliver for real, set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>,{' '}
+          <code>SMTP_USER</code>, <code>SMTP_PASS</code>, <code>EMAIL_FROM</code> on the backend
+          (any SMTP works — Gmail, Resend, SendGrid, Mailgun). Until then, every email is recorded below so you can verify the flow.
+        </p>
+        <div className="row" style={{ marginBottom: 12 }}>
+          <button className="btn secondary" onClick={test} disabled={busy}>{busy ? 'Sending…' : 'Send test email'}</button>
+          {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
+        </div>
+        {data?.log?.length > 0 && (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>To</th><th>Subject</th><th>Status</th></tr></thead>
+              <tbody>
+                {data.log.slice(0, 8).map((e, i) => (
+                  <tr key={i}>
+                    <td>{e.recipient}</td>
+                    <td>{e.subject}</td>
+                    <td><span className={`badge ${e.status === 'sent' ? 'confirmed' : e.status === 'failed' ? 'cancelled' : 'pending'}`}>{e.status}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
   const [creds, setCreds] = useState([]);
@@ -360,6 +424,8 @@ export default function Settings() {
       <BrandingCard />
 
       <DirectBookingCard />
+
+      <EmailCard />
 
       <WebhookCard />
 

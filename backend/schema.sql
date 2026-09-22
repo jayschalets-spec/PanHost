@@ -255,3 +255,18 @@ CREATE TABLE IF NOT EXISTS team_members (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_team_user ON team_members(user_id);
+
+-- ---------------------------------------------------------------------------
+-- email_log (transactional email history)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS email_log (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+    recipient   TEXT,
+    subject     TEXT,
+    body        TEXT,
+    status      TEXT NOT NULL DEFAULT 'logged', -- sent | logged | failed
+    error       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_email_log_user ON email_log(user_id);
