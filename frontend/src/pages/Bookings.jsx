@@ -26,8 +26,44 @@ export default function Bookings() {
   const [form, setForm] = useState(BLANK);
   const [busy, setBusy] = useState(false);
   const [params] = useSearchParams();
-  const [filter, setFilter] = useState({ platform: '', status: params.get('status') || '' });
+  const [filter, setFilter] = useState({ platform: '', status: params.get('status') || '', from: '', to: '', q: '' });
   const [detail, setDetail] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
+
+  const toggleSel = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const bulkStatus = async (status) => {
+    setBusy(true);
+    try {
+      await Promise.all([...selected].map((id) => api.put(`/api/bookings/${id}`, { status })));
+      setSelected(new Set());
+      await load();
+    } catch (err) {
+      setError(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const bulkDelete = async () => {
+    if (!confirm(`Delete ${selected.size} reservation(s)? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await Promise.all([...selected].map((id) => api.delete(`/api/bookings/${id}`)));
+      setSelected(new Set());
+      await load();
+    } catch (err) {
+      setError(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const nightsOf = (b) => Math.max(0, Math.round((localDate(b.check_out) - localDate(b.check_in)) / 86400000));
 
@@ -74,7 +110,12 @@ export default function Bookings() {
       items.filter(
         (b) =>
           (!filter.platform || b.platform === filter.platform) &&
-          (!filter.status || b.status === filter.status)
+          (!filter.status || b.status === filter.status) &&
+          (!filter.from || b.check_out.slice(0, 10) >= filter.from) &&
+          (!filter.to || b.check_in.slice(0, 10) <= filter.to) &&
+          (!filter.q ||
+            b.guest_name.toLowerCase().includes(filter.q.toLowerCase()) ||
+            (b.property_name || '').toLowerCase().includes(filter.q.toLowerCase()))
       ),
     [items, filter]
   );
@@ -291,7 +332,42 @@ export default function Bookings() {
           <option value="pending">Pending</option>
           <option value="cancelled">Cancelled</option>
         </select>
+        <input
+          type="date"
+          style={{ width: 'auto' }}
+          value={filter.from}
+          onChange={(e) => setFilter({ ...filter, from: e.target.value })}
+          title="Staying on/after"
+        />
+        <input
+          type="date"
+          style={{ width: 'auto' }}
+          value={filter.to}
+          onChange={(e) => setFilter({ ...filter, to: e.target.value })}
+          title="Staying on/before"
+        />
+        <input
+          style={{ width: 180 }}
+          placeholder="Search guest…"
+          value={filter.q}
+          onChange={(e) => setFilter({ ...filter, q: e.target.value })}
+        />
+        {(filter.platform || filter.status || filter.from || filter.to || filter.q) && (
+          <button className="btn ghost sm" onClick={() => setFilter({ platform: '', status: '', from: '', to: '', q: '' })}>Clear</button>
+        )}
       </div>
+
+      {selected.size > 0 && (
+        <div className="bulk-bar">
+          <span>{selected.size} selected</span>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn secondary sm" onClick={() => bulkStatus('confirmed')} disabled={busy}>Confirm</button>
+            <button className="btn secondary sm" onClick={() => bulkStatus('cancelled')} disabled={busy}>Cancel</button>
+            <button className="btn secondary sm" onClick={bulkDelete} disabled={busy} style={{ color: 'var(--danger)' }}>Delete</button>
+            <button className="btn ghost sm" onClick={() => setSelected(new Set())}>Clear</button>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         {filtered.length === 0 ? (
@@ -305,6 +381,16 @@ export default function Bookings() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={filtered.length > 0 && filtered.every((b) => selected.has(b.id))}
+                      onChange={(e) =>
+                        setSelected(e.target.checked ? new Set(filtered.map((b) => b.id)) : new Set())
+                      }
+                    />
+                  </th>
                   <th>Guest</th>
                   <th>Property</th>
                   <th>Platform</th>
@@ -318,7 +404,10 @@ export default function Bookings() {
               </thead>
               <tbody>
                 {filtered.map((b) => (
-                  <tr key={b.id}>
+                  <tr key={b.id} style={selected.has(b.id) ? { background: 'var(--primary-soft)' } : undefined}>
+                    <td>
+                      <input type="checkbox" style={{ width: 'auto' }} checked={selected.has(b.id)} onChange={() => toggleSel(b.id)} />
+                    </td>
                     <td>
                       <div>{b.guest_name}</div>
                       {b.guest_email && <div className="muted" style={{ fontSize: 12 }}>{b.guest_email}</div>}

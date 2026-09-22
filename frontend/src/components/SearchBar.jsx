@@ -10,7 +10,20 @@ export default function SearchBar() {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const boxRef = useRef(null);
+  const inputRef = useRef(null);
   const navigate = useNavigate();
+
+  // Cmd/Ctrl+K focuses search.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -55,11 +68,12 @@ export default function SearchBar() {
   return (
     <div className="searchbar" ref={boxRef}>
       <input
+        ref={inputRef}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => results.length && setOpen(true)}
         onKeyDown={onKey}
-        placeholder="Search guests, listings, invoices…"
+        placeholder="Search…  (⌘K)"
       />
       {open && results.length > 0 && (
         <div className="search-results">

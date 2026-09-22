@@ -25,6 +25,21 @@ export default function Statements() {
     load(month);
   }, [month]);
 
+  const exportCsv = () => {
+    if (!data) return;
+    const rows = [['Property', 'Gross revenue', 'Expenses', 'Mgmt fee', 'Net payout']];
+    data.rows.forEach((r) => rows.push([r.property, r.gross, r.expenses, r.mgmtFee, r.net]));
+    rows.push(['TOTAL', data.totals.gross, data.totals.expenses, data.totals.mgmtFee, data.totals.net]);
+    const csv = rows.map((r) => r.map((c) => (/[",\n]/.test(String(c)) ? `"${String(c).replace(/"/g, '""')}"` : c)).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `statement-${data.month}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const monthLabel = (m) => {
     const [y, mo] = m.split('-');
     return new Date(Number(y), Number(mo) - 1, 1).toLocaleString('en-US', {
@@ -96,8 +111,9 @@ export default function Statements() {
               </tfoot>
             </table>
           </div>
-          <div className="card-body">
+          <div className="card-body row" style={{ gap: 10 }}>
             <button className="btn secondary" onClick={() => window.print()}>🖨️ Print / Save PDF</button>
+            <button className="btn secondary" onClick={exportCsv}>⬇ Export CSV</button>
           </div>
         </div>
       )}

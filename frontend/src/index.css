@@ -688,6 +688,22 @@ a.ops-card:hover {
   margin-left: 6px;
 }
 
+/* ---------- Bulk action bar ---------- */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
 /* ---------- Detail grid ---------- */
 .detail-grid {
   display: grid;
