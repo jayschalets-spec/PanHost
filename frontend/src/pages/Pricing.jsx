@@ -83,7 +83,7 @@ export default function Pricing() {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const currentProp = useMemo(() => properties.find((p) => p.id === selProp), [properties, selProp]);
-  const [smart, setSmart] = useState({ min_price: 0, demand_pricing: false, demand_strength: 20, market_anchor: false });
+  const [smart, setSmart] = useState({ min_price: 0, demand_pricing: false, demand_strength: 20, market_anchor: false, seasonality: true });
   useEffect(() => {
     if (currentProp) {
       setSmart({
@@ -91,6 +91,7 @@ export default function Pricing() {
         demand_pricing: !!currentProp.demand_pricing,
         demand_strength: currentProp.demand_strength ?? 20,
         market_anchor: !!currentProp.market_anchor,
+        seasonality: currentProp.seasonality !== false,
       });
     }
   }, [currentProp]);
@@ -172,6 +173,10 @@ export default function Pricing() {
                 <input type="checkbox" style={{ width: 'auto' }} checked={smart.market_anchor} disabled={!currentProp?.market_median} onChange={(e) => saveSmart({ market_anchor: e.target.checked })} />
                 <strong>📡 Anchor to market{currentProp?.market_median ? ` ($${Math.round(currentProp.market_median)})` : ''}</strong>
               </label>
+              <label className="row" style={{ gap: 8, cursor: 'pointer' }} title="Ski/lake resort curve + Canadian holidays & long weekends">
+                <input type="checkbox" style={{ width: 'auto' }} checked={smart.seasonality} onChange={(e) => saveSmart({ seasonality: e.target.checked })} />
+                <strong>🏔️ Resort seasonality</strong>
+              </label>
               {smart.demand_pricing && (
                 <label className="row" style={{ gap: 8 }}>
                   <span className="muted" style={{ fontSize: 13 }}>Aggressiveness ±</span>
@@ -194,7 +199,7 @@ export default function Pricing() {
               </button>
             </div>
             <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-              Pipeline: {smart.market_anchor ? 'market median' : 'your base price'} → demand flex (occupancy + lead time) → manual rules override → min-price floor.
+              Pipeline: {smart.market_anchor ? 'market median' : 'your base price'} → demand flex (occupancy + lead time){smart.seasonality ? ' → resort seasonality (ski/lake + holidays)' : ''} → manual rules override → min-price floor.
               {currentProp?.market_updated_at && ` Market updated ${new Date(currentProp.market_updated_at).toLocaleDateString()}.`}
               {' '}Refreshes automatically every day.
             </p>

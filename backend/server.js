@@ -11,6 +11,7 @@ import { fetchAirbnbListing, extractListingId } from './scrape.js';
 import { fetchListingViaStayingApi, fetchAvailabilityViaStayingApi, searchMarket, stayingApiConfigured } from './stayingapi.js';
 import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
 import { sendEmail, emailTemplate, emailConfigured } from './email.js';
+import { seasonalityFactor } from './seasonality.js';
 
 dotenv.config();
 
@@ -239,8 +240,9 @@ app.post(
     const { rows } = await query(
       `INSERT INTO properties
         (user_id, name, address, city, country, bedrooms, bathrooms, max_guests, base_price, cleaning_fee,
-         description, amenities, photos, airbnb_ical_url, vrbo_ical_url, booking_com_ical_url, airbnb_listing_id, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+         description, amenities, photos, airbnb_ical_url, vrbo_ical_url, booking_com_ical_url, airbnb_listing_id, notes,
+         demand_pricing, seasonality)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, true, true) RETURNING *`,
       [
         req.accountId,
         name,
@@ -284,6 +286,7 @@ app.put(
       'demand_pricing',
       'demand_strength',
       'market_anchor',
+      'seasonality',
       'description',
       'amenities',
       'photos',
@@ -967,7 +970,7 @@ app.get(
     const propertyId = req.query.property_id;
     const days = Math.min(120, Math.max(7, Number(req.query.days) || 45));
     const prop = (await query(
-      'SELECT id, name, base_price, min_price, demand_pricing, demand_strength, market_anchor, market_median FROM properties WHERE id = $1 AND user_id = $2',
+      'SELECT id, name, base_price, min_price, demand_pricing, demand_strength, market_anchor, market_median, seasonality FROM properties WHERE id = $1 AND user_id = $2',
       [propertyId, req.accountId]
     )).rows[0];
     if (!prop) return res.status(404).json({ error: 'Property not found' });
@@ -977,6 +980,7 @@ app.get(
     const strength = Number(prop.demand_strength || 20);
     const marketMedian = Number(prop.market_median || 0);
     const anchor = prop.market_anchor && marketMedian > 0;
+    const seasonOn = prop.seasonality !== false;
     // Reference price: the real market median (when anchoring), else your base.
     const ref = anchor ? marketMedian : base;
 
@@ -1034,7 +1038,19 @@ app.get(
         if (demandPct !== 0) applied.push(`Demand ${demandPct > 0 ? '+' : ''}${demandPct}%`);
       }
 
-      // 2) Manual rules (priority order): fixed overrides, percent stacks, lead-time windows.
+      // 2) Resort seasonality (ski/lake curve + Canadian holidays & long weekends).
+      let seasonPct = 0;
+      if (seasonOn && ref > 0) {
+        const s = seasonalityFactor(dt);
+        seasonPct = s.pct;
+        if (seasonPct !== 0) {
+          price = price * (1 + seasonPct / 100);
+          const tag = s.labels[0] || 'Season';
+          applied.push(`${tag} ${seasonPct > 0 ? '+' : ''}${seasonPct}%`);
+        }
+      }
+
+      // 3) Manual rules (priority order): fixed overrides, percent stacks, lead-time windows.
       for (const r of rules) {
         let matches = false;
         if (r.kind === 'weekend') matches = isWeekend;
@@ -1048,12 +1064,12 @@ app.get(
         applied.push(r.name);
       }
 
-      // 3) Floor.
+      // 4) Floor.
       if (floor > 0 && price < floor) price = floor;
 
-      out.push({ date: iso, weekend: isWeekend, price: Math.round(price), min_stay: minStay, booked: isBooked(iso), demand: demandPct, rules: applied });
+      out.push({ date: iso, weekend: isWeekend, price: Math.round(price), min_stay: minStay, booked: isBooked(iso), demand: demandPct, season: seasonPct, rules: applied });
     }
-    res.json({ property: prop.name, base, min_price: floor, demand_pricing: demandOn, demand_strength: strength, market_anchor: anchor, market_median: marketMedian, days: out });
+    res.json({ property: prop.name, base, min_price: floor, demand_pricing: demandOn, demand_strength: strength, market_anchor: anchor, market_median: marketMedian, seasonality: seasonOn, days: out });
   })
 );
 
