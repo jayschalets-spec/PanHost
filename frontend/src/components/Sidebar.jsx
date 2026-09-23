@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../auth.jsx';
 import Logo from './Logo.jsx';
+import Icon from './Icon.jsx';
 
 function readTheme() {
   try {
@@ -15,25 +16,25 @@ function readTheme() {
 const OPS = ['owner', 'co-host', 'cleaner', 'maintenance'];
 const MGMT = ['owner', 'co-host'];
 const LINKS = [
-  { to: '/', label: 'Dashboard', icon: '📊', end: true },
-  { to: '/messages', label: 'Inbox', icon: '💬', roles: MGMT },
-  { to: '/properties', label: 'Listings', icon: '🏠', roles: MGMT },
-  { to: '/bookings', label: 'Reservations', icon: '📅', roles: MGMT },
-  { to: '/guests', label: 'Guests', icon: '👥', roles: MGMT },
-  { to: '/calendar', label: 'Calendar', icon: '🗓️', roles: OPS },
-  { to: '/channels', label: 'Channel Manager', icon: '🔌', roles: MGMT },
-  { to: '/reviews', label: 'Reviews', icon: '⭐', roles: MGMT },
-  { to: '/tasks', label: 'Tasks', icon: '✅', roles: OPS },
-  { to: '/smart-locks', label: 'Smart Locks', icon: '🔐', roles: OPS },
-  { to: '/team', label: 'Team', icon: '🧑‍🤝‍🧑', roles: MGMT },
-  { to: '/pricing', label: 'Pricing', icon: '💲', roles: MGMT },
-  { to: '/market', label: 'Market', icon: '📡', roles: MGMT },
-  { to: '/finances', label: 'Finances', icon: '💰', roles: ['owner'] },
-  { to: '/billing', label: 'Billing', icon: '💳', roles: ['owner'] },
-  { to: '/statements', label: 'Statements', icon: '🧾', roles: ['owner'] },
-  { to: '/analytics', label: 'Analytics', icon: '📈', roles: MGMT },
-  { to: '/automations', label: 'Automations', icon: '⚡', roles: MGMT },
-  { to: '/settings', label: 'Settings', icon: '⚙️', roles: ['owner'] },
+  { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
+  { to: '/messages', label: 'Inbox', icon: 'inbox', roles: MGMT },
+  { to: '/properties', label: 'Listings', icon: 'home', roles: MGMT },
+  { to: '/bookings', label: 'Reservations', icon: 'calendarCheck', roles: MGMT },
+  { to: '/guests', label: 'Guests', icon: 'users', roles: MGMT },
+  { to: '/calendar', label: 'Calendar', icon: 'calendar', roles: OPS },
+  { to: '/channels', label: 'Channel Manager', icon: 'plug', roles: MGMT },
+  { to: '/reviews', label: 'Reviews', icon: 'star', roles: MGMT },
+  { to: '/tasks', label: 'Tasks', icon: 'check', roles: OPS },
+  { to: '/smart-locks', label: 'Smart Locks', icon: 'lock', roles: OPS },
+  { to: '/team', label: 'Team', icon: 'users', roles: MGMT },
+  { to: '/pricing', label: 'Pricing', icon: 'tag', roles: MGMT },
+  { to: '/market', label: 'Market', icon: 'radar', roles: MGMT },
+  { to: '/finances', label: 'Finances', icon: 'wallet', roles: ['owner'] },
+  { to: '/billing', label: 'Billing', icon: 'card', roles: ['owner'] },
+  { to: '/statements', label: 'Statements', icon: 'file', roles: ['owner'] },
+  { to: '/analytics', label: 'Analytics', icon: 'chart', roles: MGMT },
+  { to: '/automations', label: 'Automations', icon: 'bolt', roles: MGMT },
+  { to: '/settings', label: 'Settings', icon: 'gear', roles: ['owner'] },
 ];
 
 export default function Sidebar({ open, onClose }) {
@@ -66,7 +67,7 @@ export default function Sidebar({ open, onClose }) {
             className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
             onClick={onClose}
           >
-            <span className="icon">{l.icon}</span>
+            <span className="icon"><Icon name={l.icon} /></span>
             <span>{l.label}</span>
           </NavLink>
         ))}

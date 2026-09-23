@@ -141,7 +141,16 @@ a {
 
 .nav-link .icon {
   width: 18px;
-  text-align: center;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.nav-link.active .icon {
+  opacity: 1;
 }
 
 .sidebar-footer {
