@@ -315,6 +315,13 @@ app.put(
       vals
     );
     if (!rows.length) return res.status(404).json({ error: 'Property not found' });
+    // Enabling market anchor with no cached median yet → fetch it now (best-effort).
+    if (req.body.market_anchor === true && !rows[0].market_median && stayingApiConfigured()) {
+      try {
+        const med = await refreshMarketMedian(rows[0]);
+        if (med) rows[0].market_median = med;
+      } catch { /* non-fatal; scheduler will retry */ }
+    }
     res.json(rows[0]);
   })
 );
@@ -1069,6 +1076,22 @@ const median = (arr) => {
   return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
 };
 
+// Recompute + cache the market median for one property (used by the endpoint and scheduler).
+async function refreshMarketMedian(prop) {
+  if (!stayingApiConfigured()) return null;
+  const location = prop.address ? `${prop.address}, ${prop.city || ''}` : [prop.city, prop.country].filter(Boolean).join(', ');
+  if (!location.trim()) return null;
+  const comps = await searchMarket({ location, limit: 40 });
+  const priced = comps.filter((c) => c.nightly != null && c.nightly > 0);
+  const comparable = prop.bedrooms
+    ? priced.filter((c) => c.bedrooms == null || Math.abs(c.bedrooms - prop.bedrooms) <= 1)
+    : priced;
+  const set = comparable.length >= 3 ? comparable : priced;
+  const med = median(set.map((c) => c.nightly));
+  if (med > 0) await query('UPDATE properties SET market_median = $1, market_updated_at = now() WHERE id = $2', [med, prop.id]);
+  return med;
+}
+
 app.get(
   '/api/market',
   auth,
@@ -1790,6 +1813,28 @@ async function scheduledAutomationSweep() {
     if (total > 0) console.log(`[scheduler] Sent ${total} automated message(s).`);
   } catch (err) {
     console.error('[scheduler] sweep failed:', err.message);
+  }
+}
+
+// Daily: refresh cached market medians for every market-anchored listing.
+async function scheduledMarketSweep() {
+  if (!stayingApiConfigured()) return;
+  try {
+    const props = (await query(
+      'SELECT id, address, city, country, bedrooms FROM properties WHERE market_anchor = true'
+    )).rows;
+    let ok = 0;
+    for (const p of props) {
+      try {
+        await refreshMarketMedian(p);
+        ok += 1;
+      } catch (e) {
+        console.error('[scheduler] market refresh failed for', p.id, e.message);
+      }
+    }
+    if (ok > 0) console.log(`[scheduler] Refreshed market median for ${ok} listing(s).`);
+  } catch (err) {
+    console.error('[scheduler] market sweep failed:', err.message);
   }
 }
 
@@ -2556,6 +2601,11 @@ const server = app.listen(PORT, () => {
 const AUTOMATION_INTERVAL_MS = 60 * 60 * 1000;
 setTimeout(scheduledAutomationSweep, 30 * 1000);
 const automationTimer = setInterval(scheduledAutomationSweep, AUTOMATION_INTERVAL_MS);
+
+// Market medians refresh daily (a bit after boot).
+setTimeout(scheduledMarketSweep, 90 * 1000);
+const marketTimer = setInterval(scheduledMarketSweep, 24 * 60 * 60 * 1000);
+marketTimer.unref?.();
 automationTimer.unref?.();
 
 // Graceful shutdown for containers / dev restarts.

@@ -108,7 +108,31 @@ export default function Pricing() {
   };
 
   const propRules = useMemo(() => rules.filter((r) => !selProp || r.property_id === selProp), [rules, selProp]);
-  const avgPrice = preview ? Math.round(preview.days.reduce((s, d) => s + d.price, 0) / preview.days.length) : 0;
+  const stats = useMemo(() => {
+    if (!preview || !preview.days.length) return null;
+    const open = preview.days.filter((d) => !d.booked).map((d) => d.price);
+    const src = open.length ? open : preview.days.map((d) => d.price);
+    return {
+      avg: Math.round(src.reduce((s, p) => s + p, 0) / src.length),
+      min: Math.min(...src),
+      max: Math.max(...src),
+    };
+  }, [preview]);
+  const [refreshingMkt, setRefreshingMkt] = useState(false);
+
+  const refreshMarket = async () => {
+    setRefreshingMkt(true);
+    setError('');
+    try {
+      await api.get(`/api/market?property_id=${selProp}`);
+      await load();
+      loadPreview(selProp);
+    } catch (err) {
+      setError(apiError(err));
+    } finally {
+      setRefreshingMkt(false);
+    }
+  };
 
   const ruleValue = (r) =>
     r.adjust === 'percent' ? `${Number(r.percent) > 0 ? '+' : ''}${r.percent}%` : money(r.price);
@@ -128,7 +152,11 @@ export default function Pricing() {
         <select style={{ width: 'auto' }} value={selProp} onChange={(e) => setSelProp(e.target.value)}>
           {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        {preview && <span className="muted" style={{ alignSelf: 'center' }}>Base {money(preview.base)} · avg next 45 nights <strong>{money(avgPrice)}</strong></span>}
+        {preview && stats && (
+          <span className="muted" style={{ alignSelf: 'center' }}>
+            Base {money(preview.base)} · next 45 nights avg <strong>{money(stats.avg)}</strong> · range {money(stats.min)}–{money(stats.max)}
+          </span>
+        )}
       </div>
 
       {/* Smart pricing controls */}
@@ -161,9 +189,14 @@ export default function Pricing() {
                   onChange={(e) => setSmart({ ...smart, min_price: e.target.value })}
                   onBlur={(e) => saveSmart({ min_price: Number(e.target.value) })} />
               </label>
+              <button className="btn secondary sm" onClick={refreshMarket} disabled={refreshingMkt}>
+                {refreshingMkt ? 'Refreshing…' : '📡 Refresh market'}
+              </button>
             </div>
             <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-              Demand pricing auto-adjusts nightly rates by occupancy pace + lead time (last-minute softens, far-out lifts). Manual rules below always override.
+              Pipeline: {smart.market_anchor ? 'market median' : 'your base price'} → demand flex (occupancy + lead time) → manual rules override → min-price floor.
+              {currentProp?.market_updated_at && ` Market updated ${new Date(currentProp.market_updated_at).toLocaleDateString()}.`}
+              {' '}Refreshes automatically every day.
             </p>
           </div>
         </div>
@@ -183,6 +216,11 @@ export default function Pricing() {
                 <div key={d.date} className={`price-cell ${d.weekend ? 'weekend' : ''} ${d.booked ? 'booked' : ''}`} title={`${d.date}${d.rules.length ? ' · ' + d.rules.join(', ') : ''}${d.min_stay > 1 ? ' · min ' + d.min_stay : ''}`}>
                   <div className="pc-day">{format(localDate(d.date), 'EEE d')}</div>
                   <div className="pc-price">{d.booked ? '✕' : money(d.price)}</div>
+                  {!d.booked && d.demand ? (
+                    <div className="pc-demand" style={{ color: d.demand > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                      {d.demand > 0 ? '▲' : '▼'} {Math.abs(d.demand)}%
+                    </div>
+                  ) : null}
                   {d.min_stay > 1 && !d.booked && <div className="pc-min">min {d.min_stay}</div>}
                 </div>
               ))}

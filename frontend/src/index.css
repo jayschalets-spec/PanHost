@@ -730,6 +730,12 @@ a.ops-card:hover {
   margin-top: 2px;
 }
 
+.pc-demand {
+  font-size: 10px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
 /* ---------- Bulk action bar ---------- */
 .bulk-bar {
   display: flex;
