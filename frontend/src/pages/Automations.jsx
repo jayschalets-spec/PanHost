@@ -27,6 +27,11 @@ const STARTERS = [
     trigger: 'after_checkout',
     body: 'Hi {{guest}}, thanks so much for staying at {{property}}! Checkout is at 11am. Safe travels — a review would mean the world.',
   },
+  {
+    name: 'Review request',
+    trigger: 'after_checkout',
+    body: "Hi {{guest}}, we loved hosting you at {{property}}! If you have a moment, we'd be grateful for a quick review: {{review}}",
+  },
 ];
 
 export default function Automations() {
@@ -127,7 +132,7 @@ export default function Automations() {
         Variables (auto-filled): <code>{'{{guest}}'}</code> <code>{'{{property}}'}</code>{' '}
         <code>{'{{checkin}}'}</code> <code>{'{{checkout}}'}</code> <code>{'{{checkin_time}}'}</code>{' '}
         <code>{'{{wifi}}'}</code> <code>{'{{wifi_password}}'}</code> <code>{'{{doorcode}}'}</code>{' '}
-        <code>{'{{guide}}'}</code> (guidebook) <code>{'{{trip}}'}</code> (guest trip page). Active templates with a trigger send automatically; all appear as one-tap chips in the Inbox.
+        <code>{'{{guide}}'}</code> (guidebook) <code>{'{{trip}}'}</code> (trip page) <code>{'{{review}}'}</code> (review link). Active templates with a trigger send automatically; all appear as one-tap chips in the Inbox.
       </div>
 
       {items.length === 0 ? (

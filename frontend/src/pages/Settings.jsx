@@ -143,7 +143,7 @@ function BrandingCard() {
     name: user?.name || '',
     company: user?.company || '',
     brand_name: user?.brand_name || '',
-    brand_color: user?.brand_color || '#4f46e5',
+    brand_color: user?.brand_color || '#0d9488',
     mgmt_fee_pct: user?.mgmt_fee_pct ?? 0,
     currency: user?.currency || 'USD',
   });

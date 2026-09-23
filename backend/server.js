@@ -1738,7 +1738,8 @@ function renderTemplate(body, booking) {
     .replace(/\{\{wifi_password\}\}/gi, booking.wifi_password || '')
     .replace(/\{\{doorcode\}\}/gi, booking.door_code || '')
     .replace(/\{\{guide\}\}/gi, booking.property_id ? `${PUBLIC_URL}/guide/${booking.property_id}` : '')
-    .replace(/\{\{trip\}\}/gi, booking.id ? `${PUBLIC_URL}/trip/${booking.id}` : '');
+    .replace(/\{\{trip\}\}/gi, booking.id ? `${PUBLIC_URL}/trip/${booking.id}` : '')
+    .replace(/\{\{review\}\}/gi, booking.id ? `${PUBLIC_URL}/review/${booking.id}` : '');
 }
 
 async function runAutomationsForUser(userId) {
@@ -2522,6 +2523,46 @@ app.get(
     );
     if (!rows.length) return res.status(404).json({ error: 'Reservation not found' });
     res.json(rows[0]);
+  })
+);
+
+// Public: guest submits a review from an emailed link.
+app.get(
+  '/api/public/review/:bookingId',
+  wrap(async (req, res) => {
+    const b = (await query(
+      `SELECT b.guest_name, b.id, p.name AS property_name, u.brand_name, u.company, u.brand_color,
+              (SELECT COUNT(*)::int FROM reviews r WHERE r.booking_id = b.id) AS reviewed
+         FROM bookings b JOIN properties p ON p.id = b.property_id JOIN users u ON u.id = b.user_id
+        WHERE b.id = $1`,
+      [req.params.bookingId]
+    )).rows[0];
+    if (!b) return res.status(404).json({ error: 'Reservation not found' });
+    res.json({
+      guest_name: b.guest_name,
+      property_name: b.property_name,
+      brand: b.brand_name || b.company || 'PanHost',
+      brand_color: b.brand_color,
+      already: b.reviewed > 0,
+    });
+  })
+);
+
+app.post(
+  '/api/public/review/:bookingId',
+  wrap(async (req, res) => {
+    const { rating, body } = req.body || {};
+    const b = (await query('SELECT id, user_id, property_id, guest_name, platform FROM bookings b WHERE b.id = $1', [req.params.bookingId])).rows[0];
+    if (!b) return res.status(404).json({ error: 'Reservation not found' });
+    const exists = await query('SELECT id FROM reviews WHERE booking_id = $1', [b.id]);
+    if (exists.rows.length) return res.status(409).json({ error: 'A review was already submitted for this stay. Thank you!' });
+    const r = Math.min(5, Math.max(1, Number(rating) || 5));
+    await query(
+      `INSERT INTO reviews (user_id, property_id, booking_id, guest_name, platform, rating, body)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [b.user_id, b.property_id, b.id, b.guest_name, b.platform || 'direct', r, body || null]
+    );
+    res.status(201).json({ ok: true });
   })
 );
 
