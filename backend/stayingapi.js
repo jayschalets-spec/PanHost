@@ -1,0 +1,44 @@
+// StayingAPI integration — reliable public listing data (photos, amenities,
+// details) across Airbnb/VRBO/Booking. Unofficial third-party service that does
+// the fetching server-side, so PanHost doesn't get blocked. The user supplies a
+// free API key (STAYINGAPI_KEY); when absent, callers fall back to direct scrape.
+import axios from 'axios';
+
+const BASE = process.env.STAYINGAPI_BASE || 'https://api.stayingapi.com/v1';
+
+export const stayingApiConfigured = () => !!process.env.STAYINGAPI_KEY;
+
+// Fetch a listing and normalize to PanHost's property shape.
+export async function fetchListingViaStayingApi(platform, id) {
+  const key = process.env.STAYINGAPI_KEY;
+  if (!key) {
+    const err = new Error('StayingAPI is not configured. Get a free key at stayingapi.com and set STAYINGAPI_KEY.');
+    err.code = 'NOT_CONFIGURED';
+    throw err;
+  }
+  const { data } = await axios.get(`${BASE}/listing/${platform}/${id}`, {
+    headers: { Authorization: `Bearer ${key}` },
+    timeout: 20000,
+  });
+  const d = data?.data || data || {};
+  const loc = d.location || {};
+  const photos = Array.isArray(d.images) ? d.images.filter(Boolean) : [];
+  const amenities = Array.isArray(d.amenities)
+    ? d.amenities.map((a) => (typeof a === 'string' ? a : a?.name)).filter(Boolean)
+    : [];
+  return {
+    listing_id: String(id),
+    title: d.name || '',
+    photos,
+    amenities,
+    bedrooms: d.bedrooms ?? undefined,
+    bathrooms: d.bathrooms ?? undefined,
+    max_guests: d.maxOccupancy ?? d.guests ?? undefined,
+    city: loc.city || undefined,
+    address: loc.address || undefined,
+    description: d.description || d.summary || '',
+    rating: d.guestRating ?? undefined,
+    review_count: d.reviewCount ?? undefined,
+    source: 'stayingapi',
+  };
+}

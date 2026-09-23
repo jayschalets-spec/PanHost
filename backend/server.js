@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import { query, pool } from './db.js';
 import { parseICS, isRealReservation } from './ical.js';
 import { fetchAirbnbListing, extractListingId } from './scrape.js';
+import { fetchListingViaStayingApi, stayingApiConfigured } from './stayingapi.js';
 import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
 import { sendEmail, emailTemplate, emailConfigured } from './email.js';
 
@@ -683,29 +684,40 @@ app.post(
   '/api/import/airbnb',
   auth,
   wrap(async (req, res) => {
+    const platform = (req.body?.platform || 'airbnb').toLowerCase();
     const listingId = extractListingId(req.body?.listing_id || req.body?.url);
     if (!listingId) {
       return res
         .status(400)
-        .json({ error: 'Provide the Airbnb listing URL or ID (or set the iCal URL on the listing).' });
+        .json({ error: 'Provide the listing URL or ID.' });
     }
+
+    // Preferred: StayingAPI (reliable, key-based). Fallback: direct public scrape.
+    if (stayingApiConfigured()) {
+      try {
+        const data = await fetchListingViaStayingApi(platform, listingId);
+        if (data.photos.length || data.title) return res.json(data);
+        return res.status(422).json({ error: 'StayingAPI returned no data for that listing.' });
+      } catch (err) {
+        const msg = err.response?.data?.error || err.message;
+        return res.status(502).json({ error: `StayingAPI error: ${msg}` });
+      }
+    }
+
     try {
       const data = await fetchAirbnbListing(listingId);
-      // A real listing always has photos; anything else is a block/404/homepage.
       if (data.photos.length === 0) {
         return res.status(422).json({
           error:
-            'Airbnb did not return the listing (it may be blocking automated requests or the listing is not public). Try again shortly, or add the content manually.',
+            'Airbnb blocked the automated request. Add a free StayingAPI key (Settings → Integrations) for reliable listing import, or enter the content manually.',
         });
       }
       res.json({ listing_id: listingId, ...data });
     } catch (err) {
       if (err.response && (err.response.status === 404 || err.response.status === 410)) {
-        return res
-          .status(422)
-          .json({ error: 'Listing not found or not public yet.' });
+        return res.status(422).json({ error: 'Listing not found or not public yet.' });
       }
-      res.status(502).json({ error: `Could not reach Airbnb (${err.message}).` });
+      res.status(502).json({ error: `Could not reach Airbnb (${err.message}). Add a StayingAPI key for reliable import.` });
     }
   })
 );
@@ -713,7 +725,12 @@ app.post(
 // ---------------------------------------------------------------------------
 // Official OTA integrations — status + partner-API sync (when configured)
 // ---------------------------------------------------------------------------
-app.get('/api/integrations', auth, (req, res) => res.json({ integrations: integrationStatus() }));
+app.get('/api/integrations', auth, (req, res) =>
+  res.json({
+    integrations: integrationStatus(),
+    listingData: { provider: 'StayingAPI', configured: stayingApiConfigured(), signupUrl: 'https://stayingapi.com' },
+  })
+);
 
 app.post(
   '/api/integrations/:platform/sync',

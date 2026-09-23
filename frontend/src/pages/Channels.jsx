@@ -11,6 +11,7 @@ export default function Channels() {
   const [data, setData] = useState(null);
   const [conflicts, setConflicts] = useState([]);
   const [integrations, setIntegrations] = useState([]);
+  const [listingData, setListingData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -22,6 +23,7 @@ export default function Channels() {
         setData(c.data);
         setConflicts(cf.data.conflicts);
         setIntegrations(ig.data.integrations);
+        setListingData(ig.data.listingData);
       })
       .catch((e) => setError(apiError(e)))
       .finally(() => setLoading(false));
@@ -156,6 +158,30 @@ export default function Channels() {
           </div>
         </div>
       </div>
+
+      {listingData && (
+        <div className="card" style={{ marginTop: 24 }}>
+          <div className="card-header">
+            <h3>📥 Listing data import ({listingData.provider})</h3>
+            <span className={`badge ${listingData.configured ? 'confirmed' : 'pending'}`}>
+              {listingData.configured ? 'Connected' : 'Not connected'}
+            </span>
+          </div>
+          <div className="card-body">
+            <p className="muted" style={{ fontSize: 13 }}>
+              Reliably import a listing's photos, amenities & details from Airbnb/VRBO/Booking via
+              StayingAPI (Airbnb blocks direct scraping). Grab a free key, then set{' '}
+              <code>STAYINGAPI_KEY</code> on the backend — the <strong>Pull from Airbnb</strong> button
+              on each listing then works reliably.
+            </p>
+            {!listingData.configured && (
+              <a className="btn secondary sm" href={listingData.signupUrl} target="_blank" rel="noreferrer" style={{ marginTop: 8 }}>
+                Get a free StayingAPI key ↗
+              </a>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="alert info" style={{ marginTop: 20 }}>
         Connect a channel by adding its iCal export URL on the listing (Listings → Edit). PanHost
