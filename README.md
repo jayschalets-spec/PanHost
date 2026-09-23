@@ -1,8 +1,8 @@
-# PropManager — Property Management SaaS
+# PanHost — Property Management SaaS
 
-A Hostaway-style property management system for Airbnb, VRBO, and direct bookings. Manage listings, reservations, a unified guest inbox, pricing, tasks, finances, and analytics from one dashboard.
+A Hostaway-class property management system for Airbnb, VRBO, Booking.com, and direct bookings — with PriceLabs-style dynamic pricing and live market data. Manage everything from one branded dashboard.
 
-Built as a full-stack app: **React + Vite** frontend, **Node + Express + PostgreSQL** backend, multi-tenant and deployable free.
+Full-stack: **React + Vite** frontend, **Node + Express + PostgreSQL** backend. Multi-tenant with staff logins, dark mode, mobile-ready, deployable free.
 
 ---
 
@@ -10,19 +10,22 @@ Built as a full-stack app: **React + Vite** frontend, **Node + Express + Postgre
 
 | Area | What it does |
 |------|--------------|
-| **Dashboard** | KPI cards (all clickable), revenue-by-platform, next check-in countdown, upcoming table |
-| **Unified Inbox** | Threaded guest conversations across Airbnb/VRBO/direct, canned-reply templates, email for direct guests |
-| **Listings** | Rich listings with photos (gallery view), description, amenities, per-listing iCal URLs |
-| **Reservations** | Full CRUD, platform/status filters, one-click "Message guest" |
-| **Calendar** | Unified month view of availability across all platforms |
-| **Tasks** | Kanban board (Open / In progress / Done) with auto-generated cleaning turnovers |
-| **Pricing** | Seasonal rate rules with minimum-stay |
-| **Finances** | Revenue, expenses (7 categories) with per-category breakdown, profit & margin |
-| **Analytics** | Occupancy, ADR, RevPAR, nights sold, 6-month revenue-vs-expense chart |
-| **Automations** | Message templates with triggers (booking confirmed, before check-in, after check-out) |
-| **Calendar sync** | Real iCal import from Airbnb/VRBO listing calendars (no partner approval needed) |
+| **Dashboard** | Operational "today" cards (check-ins/outs, staying, approvals), clickable KPIs, revenue-by-platform, onboarding wizard |
+| **Unified Inbox** | Threaded guest conversations across channels, canned templates, **AI reply suggestions**, email for direct guests |
+| **Listings** | Photos + gallery, amenities, description, guidebook, per-channel iCal URLs; **StayingAPI content import** |
+| **Reservations** | CRUD, date/guest filters, bulk actions, CSV import/export, detail drawer, guest trip links |
+| **Guests CRM** | Profiles, stay history, lifetime value, VIP flags |
+| **Calendar** | Month + multi-listing **timeline**, click-to-create |
+| **Channel Manager** | Multi-channel connections, **double-booking conflict detection**, outbound availability iCal feed, official-API scaffolding |
+| **Pricing** | **Dynamic pricing** — market-anchored + demand (occupancy/lead-time), seasonal & weekend rules, %/fixed, min-price floor, min-stays, live price calendar |
+| **Market** | Live comparable listings by proximity (via StayingAPI): median/avg/range, suggested rate |
+| **Reviews / Tasks / Team / Smart Locks / Finances / Billing / Statements / Analytics / Automations** | Full modules — kanban turnovers, door codes, invoices + pay links, owner P&L, KPIs, scheduled auto-messages |
+| **Guest experience** | Public booking site, guest trip portal, digital guidebook, review-request loop |
+| **Integrations** | iCal two-way sync, StayingAPI (listing data/market), Zapier inbound webhook, transactional email (SMTP), partner-API ready |
 
-Multi-tenant (every record scoped to the owner), JWT auth, and built to resell as SaaS.
+Multi-tenant with role-scoped **staff logins** (owner / co-host / cleaner / maintenance), JWT auth, white-label branding + multi-currency.
+
+> **Honest integration note:** Airbnb/VRBO have no public API for individuals; official two-way sync requires approved partner status. PanHost ships iCal sync (works today), a Zapier email→webhook path, StayingAPI for listing/market data, and a partner-API client that activates the moment you add credentials.
 
 ---
 
