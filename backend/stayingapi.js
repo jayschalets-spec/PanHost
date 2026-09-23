@@ -39,8 +39,56 @@ export async function fetchListingViaStayingApi(platform, id) {
     description: d.description || d.summary || '',
     rating: d.guestRating ?? undefined,
     review_count: d.reviewCount ?? undefined,
+    lat: loc.lat ?? undefined,
+    lng: loc.lng ?? undefined,
     source: 'stayingapi',
   };
+}
+
+// Search comparable listings near a location (city / region / address).
+export async function searchMarket({ location, checkIn, checkOut, adults, limit }) {
+  const key = process.env.STAYINGAPI_KEY;
+  if (!key) {
+    const err = new Error('StayingAPI is not configured. Get a free key at stayingapi.com and set STAYINGAPI_KEY.');
+    err.code = 'NOT_CONFIGURED';
+    throw err;
+  }
+  const { data } = await axios.get(`${BASE}/search`, {
+    headers: { Authorization: `Bearer ${key}` },
+    params: {
+      location,
+      checkIn: checkIn || undefined,
+      checkOut: checkOut || undefined,
+      adults: adults || undefined,
+      limit: Math.min(40, limit || 30),
+      sort: 'recommended',
+    },
+    timeout: 25000,
+  });
+  const rows = data?.data || [];
+  return rows.map((r) => {
+    const loc = r.location || {};
+    const price = r.price || {};
+    return {
+      id: r.id,
+      platform: r.platform,
+      name: r.name,
+      url: r.url,
+      nightly: price.nightlyPrice ?? null,
+      currency: price.currency || 'USD',
+      bedrooms: r.bedrooms ?? null,
+      bathrooms: r.bathrooms ?? null,
+      maxOccupancy: r.maxOccupancy ?? null,
+      rating: r.guestRating ?? null,
+      reviewCount: r.reviewCount ?? null,
+      propertyType: r.propertyType || null,
+      city: loc.city || null,
+      address: loc.address || null,
+      lat: loc.lat ?? null,
+      lng: loc.lng ?? null,
+      image: Array.isArray(r.images) ? r.images[0] : null,
+    };
+  });
 }
 
 // Day-by-day public availability for a listing over a date window.

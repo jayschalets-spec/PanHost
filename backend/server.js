@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import { query, pool } from './db.js';
 import { parseICS, isRealReservation } from './ical.js';
 import { fetchAirbnbListing, extractListingId } from './scrape.js';
-import { fetchListingViaStayingApi, fetchAvailabilityViaStayingApi, stayingApiConfigured } from './stayingapi.js';
+import { fetchListingViaStayingApi, fetchAvailabilityViaStayingApi, searchMarket, stayingApiConfigured } from './stayingapi.js';
 import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
 import { sendEmail, emailTemplate, emailConfigured } from './email.js';
 
@@ -280,6 +280,9 @@ app.put(
       'max_guests',
       'base_price',
       'cleaning_fee',
+      'min_price',
+      'demand_pricing',
+      'demand_strength',
       'description',
       'amenities',
       'photos',
@@ -955,9 +958,15 @@ app.get(
   wrap(async (req, res) => {
     const propertyId = req.query.property_id;
     const days = Math.min(120, Math.max(7, Number(req.query.days) || 45));
-    const prop = (await query('SELECT id, name, base_price FROM properties WHERE id = $1 AND user_id = $2', [propertyId, req.accountId])).rows[0];
+    const prop = (await query(
+      'SELECT id, name, base_price, min_price, demand_pricing, demand_strength FROM properties WHERE id = $1 AND user_id = $2',
+      [propertyId, req.accountId]
+    )).rows[0];
     if (!prop) return res.status(404).json({ error: 'Property not found' });
     const base = Number(prop.base_price || 0);
+    const floor = Number(prop.min_price || 0);
+    const demandOn = prop.demand_pricing;
+    const strength = Number(prop.demand_strength || 20);
 
     const rules = (await query('SELECT * FROM pricing_rules WHERE user_id = $1 AND property_id = $2 ORDER BY priority ASC', [req.accountId, propertyId])).rows;
     const bookings = (await query(
@@ -973,40 +982,161 @@ app.get(
     const isBooked = (d) => bookings.some((b) => d >= isoOf(b.check_in) && d < isoOf(b.check_out));
     const inRange = (r, d) => (!r.start_date || d >= isoOf(r.start_date)) && (!r.end_date || d <= isoOf(r.end_date));
 
-    const out = [];
     const today = new Date();
+    const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const daysUntil = (dt) => Math.round((dt - midnight) / 86400000);
+
+    // Occupancy pace around a date (±window) — our demand proxy.
+    const occAround = (dt) => {
+      const W = 10;
+      let booked = 0;
+      for (let i = -W; i <= W; i += 1) {
+        const d = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + i);
+        if (isBooked(isoOf(d))) booked += 1;
+      }
+      return booked / (W * 2 + 1); // 0..1
+    };
+
+    const out = [];
     for (let k = 0; k < days; k += 1) {
       const dt = new Date(today.getFullYear(), today.getMonth(), today.getDate() + k);
-      const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-      const dow = dt.getDay(); // 0 Sun .. 6 Sat
+      const iso = isoOf(dt);
+      const dow = dt.getDay();
       const isWeekend = dow === 5 || dow === 6;
+      const dUntil = daysUntil(dt);
       let price = base;
       let minStay = 1;
       const applied = [];
-      // Rules apply in priority order; later (higher priority) can override/stack.
+      let demandPct = 0;
+
+      // 1) Demand-based auto adjustment (occupancy pace + lead time).
+      if (demandOn && base > 0) {
+        const occ = occAround(dt);
+        let signal = (occ - 0.5) * 2; // -1..+1
+        if (dUntil <= 7) signal -= 0.5; // last-minute softness
+        else if (dUntil >= 60) signal += 0.3; // far-out premium
+        signal = Math.max(-1, Math.min(1, signal));
+        demandPct = Math.round(signal * strength);
+        price = price * (1 + demandPct / 100);
+        if (demandPct !== 0) applied.push(`Demand ${demandPct > 0 ? '+' : ''}${demandPct}%`);
+      }
+
+      // 2) Manual rules (priority order): fixed overrides, percent stacks, lead-time windows.
       for (const r of rules) {
-        const matches =
-          (r.kind === 'weekend' && isWeekend) ||
-          (r.kind !== 'weekend' && inRange(r, iso));
+        let matches = false;
+        if (r.kind === 'weekend') matches = isWeekend;
+        else if (r.kind === 'lastminute') matches = r.window_days != null && dUntil <= r.window_days;
+        else if (r.kind === 'faraway') matches = r.window_days != null && dUntil >= r.window_days;
+        else matches = inRange(r, iso);
         if (!matches) continue;
-        if (r.adjust === 'percent' && r.percent != null) {
-          price = price * (1 + Number(r.percent) / 100);
-        } else if (r.price != null) {
-          price = Number(r.price);
-        }
+        if (r.adjust === 'percent' && r.percent != null) price = price * (1 + Number(r.percent) / 100);
+        else if (r.price != null) price = Number(r.price);
         if (r.min_stay && r.min_stay > minStay) minStay = r.min_stay;
         applied.push(r.name);
       }
-      out.push({
-        date: iso,
-        weekend: isWeekend,
-        price: Math.round(price),
-        min_stay: minStay,
-        booked: isBooked(iso),
-        rules: applied,
-      });
+
+      // 3) Floor.
+      if (floor > 0 && price < floor) price = floor;
+
+      out.push({ date: iso, weekend: isWeekend, price: Math.round(price), min_stay: minStay, booked: isBooked(iso), demand: demandPct, rules: applied });
     }
-    res.json({ property: prop.name, base, days: out });
+    res.json({ property: prop.name, base, min_price: floor, demand_pricing: demandOn, demand_strength: strength, days: out });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Market data — comparable listings near this property (StayingAPI)
+// ---------------------------------------------------------------------------
+function haversineKm(aLat, aLng, bLat, bLng) {
+  if ([aLat, aLng, bLat, bLng].some((v) => v == null)) return null;
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)) * 10) / 10;
+}
+const median = (arr) => {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+};
+
+app.get(
+  '/api/market',
+  auth,
+  wrap(async (req, res) => {
+    const prop = (await query(
+      'SELECT id, name, address, city, country, bedrooms, base_price, airbnb_listing_id, lat, lng FROM properties WHERE id = $1 AND user_id = $2',
+      [req.query.property_id, req.accountId]
+    )).rows[0];
+    if (!prop) return res.status(404).json({ error: 'Property not found' });
+    const location = prop.address ? `${prop.address}, ${prop.city || ''}` : [prop.city, prop.country].filter(Boolean).join(', ');
+    if (!location.trim()) return res.status(400).json({ error: 'Add a city or address to this listing to analyze its market.' });
+
+    try {
+      // Backfill our coordinates from StayingAPI listing details if we don't have them.
+      let { lat, lng } = prop;
+      if ((lat == null || lng == null) && prop.airbnb_listing_id && stayingApiConfigured()) {
+        try {
+          const det = await fetchListingViaStayingApi('airbnb', prop.airbnb_listing_id);
+          if (det.lat != null && det.lng != null) {
+            lat = det.lat; lng = det.lng;
+            await query('UPDATE properties SET lat = $1, lng = $2 WHERE id = $3', [lat, lng, prop.id]);
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      const comps = await searchMarket({
+        location,
+        checkIn: req.query.checkin,
+        checkOut: req.query.checkout,
+        adults: req.query.adults ? Number(req.query.adults) : undefined,
+        limit: 40,
+      });
+
+      // Add proximity distance when we know our coords; sort by nearest else by price.
+      for (const c of comps) c.distance_km = haversineKm(lat, lng, c.lat, c.lng);
+      const haveDist = comps.some((c) => c.distance_km != null);
+      comps.sort((a, b) =>
+        haveDist ? (a.distance_km ?? 1e9) - (b.distance_km ?? 1e9) : (a.nightly ?? 1e9) - (b.nightly ?? 1e9)
+      );
+
+      // Comparable set: similar bedroom count (±1) with a nightly price.
+      const priced = comps.filter((c) => c.nightly != null && c.nightly > 0);
+      const comparable = prop.bedrooms
+        ? priced.filter((c) => c.bedrooms == null || Math.abs(c.bedrooms - prop.bedrooms) <= 1)
+        : priced;
+      const set = comparable.length >= 3 ? comparable : priced;
+      const prices = set.map((c) => c.nightly);
+      const stats = {
+        count: set.length,
+        median: median(prices),
+        avg: prices.length ? Math.round(prices.reduce((s, p) => s + p, 0) / prices.length) : 0,
+        min: prices.length ? Math.min(...prices) : 0,
+        max: prices.length ? Math.max(...prices) : 0,
+      };
+      const ourPrice = Number(prop.base_price || 0);
+      const percentile = prices.length
+        ? Math.round((prices.filter((p) => p <= ourPrice).length / prices.length) * 100)
+        : null;
+
+      res.json({
+        location,
+        hasCoords: lat != null && lng != null,
+        ourPrice,
+        stats,
+        percentile,
+        suggested: stats.median,
+        comps: comps.slice(0, 24),
+      });
+    } catch (err) {
+      if (err.code === 'NOT_CONFIGURED') {
+        return res.status(400).json({ error: 'Add a free StayingAPI key (STAYINGAPI_KEY) to pull live market data.' });
+      }
+      res.status(502).json({ error: err.response?.data?.error || err.message });
+    }
   })
 );
 

@@ -27,6 +27,7 @@ const LINKS = [
   { to: '/smart-locks', label: 'Smart Locks', icon: '🔐', roles: OPS },
   { to: '/team', label: 'Team', icon: '🧑‍🤝‍🧑', roles: MGMT },
   { to: '/pricing', label: 'Pricing', icon: '💲', roles: MGMT },
+  { to: '/market', label: 'Market', icon: '📡', roles: MGMT },
   { to: '/finances', label: 'Finances', icon: '💰', roles: ['owner'] },
   { to: '/billing', label: 'Billing', icon: '💳', roles: ['owner'] },
   { to: '/statements', label: 'Statements', icon: '🧾', roles: ['owner'] },

@@ -22,6 +22,7 @@ import Reviews from './pages/Reviews.jsx';
 import Team from './pages/Team.jsx';
 import SmartLocks from './pages/SmartLocks.jsx';
 import Statements from './pages/Statements.jsx';
+import Market from './pages/Market.jsx';
 import Billing from './pages/Billing.jsx';
 import Book from './pages/Book.jsx';
 import Guide from './pages/Guide.jsx';
@@ -41,6 +42,7 @@ const PAGE_TITLES = {
   '/smart-locks': 'Smart Locks',
   '/team': 'Team',
   '/pricing': 'Pricing',
+  '/market': 'Market',
   '/finances': 'Finances',
   '/billing': 'Billing',
   '/statements': 'Statements',
@@ -145,6 +147,7 @@ function Router() {
       <Route path="/team" element={<Protected><Team /></Protected>} />
       <Route path="/smart-locks" element={<Protected><SmartLocks /></Protected>} />
       <Route path="/pricing" element={<Protected><Pricing /></Protected>} />
+      <Route path="/market" element={<Protected><Market /></Protected>} />
       <Route path="/finances" element={<Protected><Finances /></Protected>} />
       <Route path="/billing" element={<Protected><Billing /></Protected>} />
       <Route path="/statements" element={<Protected><Statements /></Protected>} />

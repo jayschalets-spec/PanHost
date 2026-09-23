@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS properties (
     bathrooms    NUMERIC(3,1) DEFAULT 1,
     max_guests   INTEGER DEFAULT 2,
     base_price   NUMERIC(10,2) DEFAULT 0,
+    min_price    NUMERIC(10,2) DEFAULT 0,
     cleaning_fee NUMERIC(10,2) DEFAULT 0,
     description  TEXT,
     amenities    TEXT,               -- comma-separated list
@@ -82,6 +83,11 @@ ALTER TABLE properties ADD COLUMN IF NOT EXISTS airbnb_ical_url TEXT;
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS vrbo_ical_url TEXT;
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS booking_com_ical_url TEXT;
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS airbnb_listing_id TEXT;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS min_price NUMERIC(10,2) DEFAULT 0;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS demand_pricing BOOLEAN DEFAULT false;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS demand_strength INTEGER DEFAULT 20;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6);
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS lng NUMERIC(9,6);
 
 -- ---------------------------------------------------------------------------
 -- bookings
@@ -157,6 +163,7 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
     percent     NUMERIC(6,2),        -- +/- percent (when adjust = percent)
     min_stay    INTEGER DEFAULT 1,
     priority    INTEGER DEFAULT 0,   -- higher applies later (wins)
+    window_days INTEGER,             -- lastminute: <= N days out; faraway: >= N days out
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pricing_user ON pricing_rules(user_id);
@@ -166,6 +173,7 @@ ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 's
 ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS adjust TEXT DEFAULT 'fixed';
 ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS percent NUMERIC(6,2);
 ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 0;
+ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS window_days INTEGER;
 
 -- ---------------------------------------------------------------------------
 -- expenses

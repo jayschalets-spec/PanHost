@@ -82,6 +82,30 @@ export default function Pricing() {
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  const currentProp = useMemo(() => properties.find((p) => p.id === selProp), [properties, selProp]);
+  const [smart, setSmart] = useState({ min_price: 0, demand_pricing: false, demand_strength: 20 });
+  useEffect(() => {
+    if (currentProp) {
+      setSmart({
+        min_price: currentProp.min_price ?? 0,
+        demand_pricing: !!currentProp.demand_pricing,
+        demand_strength: currentProp.demand_strength ?? 20,
+      });
+    }
+  }, [currentProp]);
+
+  const saveSmart = async (patch) => {
+    const next = { ...smart, ...patch };
+    setSmart(next);
+    try {
+      await api.put(`/api/properties/${selProp}`, patch);
+      await load();
+      loadPreview(selProp);
+    } catch (err) {
+      setError(apiError(err));
+    }
+  };
+
   const propRules = useMemo(() => rules.filter((r) => !selProp || r.property_id === selProp), [rules, selProp]);
   const avgPrice = preview ? Math.round(preview.days.reduce((s, d) => s + d.price, 0) / preview.days.length) : 0;
 
@@ -105,6 +129,40 @@ export default function Pricing() {
         </select>
         {preview && <span className="muted" style={{ alignSelf: 'center' }}>Base {money(preview.base)} · avg next 45 nights <strong>{money(avgPrice)}</strong></span>}
       </div>
+
+      {/* Smart pricing controls */}
+      {currentProp && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-body">
+            <div className="row wrap" style={{ gap: 24, alignItems: 'center' }}>
+              <label className="row" style={{ gap: 8, cursor: 'pointer' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={smart.demand_pricing} onChange={(e) => saveSmart({ demand_pricing: e.target.checked })} />
+                <strong>⚡ Smart demand pricing</strong>
+              </label>
+              {smart.demand_pricing && (
+                <label className="row" style={{ gap: 8 }}>
+                  <span className="muted" style={{ fontSize: 13 }}>Aggressiveness ±</span>
+                  <select style={{ width: 'auto' }} value={smart.demand_strength} onChange={(e) => saveSmart({ demand_strength: Number(e.target.value) })}>
+                    <option value={10}>10%</option>
+                    <option value={20}>20%</option>
+                    <option value={30}>30%</option>
+                    <option value={40}>40%</option>
+                  </select>
+                </label>
+              )}
+              <label className="row" style={{ gap: 8 }}>
+                <span className="muted" style={{ fontSize: 13 }}>Min price floor $</span>
+                <input type="number" min="0" style={{ width: 90 }} value={smart.min_price}
+                  onChange={(e) => setSmart({ ...smart, min_price: e.target.value })}
+                  onBlur={(e) => saveSmart({ min_price: Number(e.target.value) })} />
+              </label>
+            </div>
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              Demand pricing auto-adjusts nightly rates by occupancy pace + lead time (last-minute softens, far-out lifts). Manual rules below always override.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Price preview calendar */}
       {preview && (
