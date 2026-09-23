@@ -688,6 +688,48 @@ a.ops-card:hover {
   margin-left: 6px;
 }
 
+/* ---------- Price calendar ---------- */
+.price-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 6px;
+}
+
+.price-cell {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 6px;
+  text-align: center;
+  background: var(--surface);
+}
+
+.price-cell.weekend {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.price-cell.booked {
+  opacity: 0.5;
+  background: var(--surface-2);
+}
+
+.pc-day {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pc-price {
+  font-size: 15px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.pc-min {
+  font-size: 10px;
+  color: var(--warning);
+  margin-top: 2px;
+}
+
 /* ---------- Bulk action bar ---------- */
 .bulk-bar {
   display: flex;

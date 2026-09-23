@@ -42,3 +42,26 @@ export async function fetchListingViaStayingApi(platform, id) {
     source: 'stayingapi',
   };
 }
+
+// Day-by-day public availability for a listing over a date window.
+export async function fetchAvailabilityViaStayingApi(platform, id, startDate, endDate) {
+  const key = process.env.STAYINGAPI_KEY;
+  if (!key) {
+    const err = new Error('StayingAPI is not configured. Get a free key at stayingapi.com and set STAYINGAPI_KEY.');
+    err.code = 'NOT_CONFIGURED';
+    throw err;
+  }
+  const { data } = await axios.get(`${BASE}/availability`, {
+    headers: { Authorization: `Bearer ${key}` },
+    params: { platform, id, start_date: startDate, end_date: endDate },
+    timeout: 20000,
+  });
+  const rows = data?.data || data || [];
+  // Normalize to [{ date, available }]
+  return (Array.isArray(rows) ? rows : rows.days || []).map((r) => ({
+    date: r.date || r.day,
+    available: r.available ?? r.isAvailable ?? !r.booked,
+    price: r.price ?? r.rate ?? null,
+    minStay: r.minStay ?? r.min_nights ?? null,
+  }));
+}

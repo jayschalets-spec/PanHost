@@ -149,14 +149,23 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
     user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     property_id UUID NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
     name        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'seasonal', -- seasonal | weekend | lastminute
     start_date  DATE,
     end_date    DATE,
-    price       NUMERIC(10,2) NOT NULL,
+    price       NUMERIC(10,2),      -- fixed nightly price (when adjust = fixed)
+    adjust      TEXT DEFAULT 'fixed', -- fixed | percent
+    percent     NUMERIC(6,2),        -- +/- percent (when adjust = percent)
     min_stay    INTEGER DEFAULT 1,
+    priority    INTEGER DEFAULT 0,   -- higher applies later (wins)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pricing_user ON pricing_rules(user_id);
 CREATE INDEX IF NOT EXISTS idx_pricing_property ON pricing_rules(property_id);
+ALTER TABLE pricing_rules ALTER COLUMN price DROP NOT NULL;
+ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'seasonal';
+ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS adjust TEXT DEFAULT 'fixed';
+ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS percent NUMERIC(6,2);
+ALTER TABLE pricing_rules ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 0;
 
 -- ---------------------------------------------------------------------------
 -- expenses

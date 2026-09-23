@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import { query, pool } from './db.js';
 import { parseICS, isRealReservation } from './ical.js';
 import { fetchAirbnbListing, extractListingId } from './scrape.js';
-import { fetchListingViaStayingApi, stayingApiConfigured } from './stayingapi.js';
+import { fetchListingViaStayingApi, fetchAvailabilityViaStayingApi, stayingApiConfigured } from './stayingapi.js';
 import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
 import { sendEmail, emailTemplate, emailConfigured } from './email.js';
 
@@ -722,6 +722,28 @@ app.post(
   })
 );
 
+// Public listing availability via StayingAPI (for a listing with airbnb_listing_id).
+app.get(
+  '/api/listings/:id/availability',
+  auth,
+  wrap(async (req, res) => {
+    const prop = (await query('SELECT airbnb_listing_id FROM properties WHERE id = $1 AND user_id = $2', [req.params.id, req.accountId])).rows[0];
+    if (!prop) return res.status(404).json({ error: 'Property not found' });
+    if (!prop.airbnb_listing_id) return res.status(400).json({ error: 'Set the Airbnb listing ID on this listing first' });
+    const start = new Date();
+    const end = new Date();
+    end.setDate(end.getDate() + 60);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    try {
+      const days = await fetchAvailabilityViaStayingApi('airbnb', prop.airbnb_listing_id, fmt(start), fmt(end));
+      res.json({ days });
+    } catch (err) {
+      if (err.code === 'NOT_CONFIGURED') return res.status(400).json({ error: err.message });
+      res.status(502).json({ error: err.response?.data?.error || err.message });
+    }
+  })
+);
+
 // ---------------------------------------------------------------------------
 // Official OTA integrations — status + partner-API sync (when configured)
 // ---------------------------------------------------------------------------
@@ -864,21 +886,52 @@ app.post(
   '/api/pricing',
   auth,
   wrap(async (req, res) => {
-    const { property_id, name, start_date, end_date, price, min_stay } = req.body || {};
-    if (!property_id || !name || price === undefined) {
-      return res.status(400).json({ error: 'property_id, name and price are required' });
+    const { property_id, name, kind, start_date, end_date, price, adjust, percent, min_stay, priority } = req.body || {};
+    if (!property_id || !name) {
+      return res.status(400).json({ error: 'property_id and name are required' });
     }
-    const owns = await query('SELECT id FROM properties WHERE id = $1 AND user_id = $2', [
-      property_id,
-      req.accountId,
-    ]);
+    if (adjust === 'percent' ? percent === undefined : price === undefined) {
+      return res.status(400).json({ error: 'Provide a price (fixed) or percent (percent adjustment)' });
+    }
+    const owns = await query('SELECT id FROM properties WHERE id = $1 AND user_id = $2', [property_id, req.accountId]);
     if (!owns.rows.length) return res.status(404).json({ error: 'Property not found' });
     const { rows } = await query(
-      `INSERT INTO pricing_rules (user_id, property_id, name, start_date, end_date, price, min_stay)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [req.accountId, property_id, name, start_date || null, end_date || null, price, min_stay || 1]
+      `INSERT INTO pricing_rules (user_id, property_id, name, kind, start_date, end_date, price, adjust, percent, min_stay, priority)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [
+        req.accountId, property_id, name,
+        kind || 'seasonal',
+        start_date || null, end_date || null,
+        adjust === 'percent' ? null : price,
+        adjust || 'fixed',
+        adjust === 'percent' ? percent : null,
+        min_stay || 1,
+        priority || (kind === 'weekend' ? 10 : 0),
+      ]
     );
     res.status(201).json(rows[0]);
+  })
+);
+
+app.put(
+  '/api/pricing/:id',
+  auth,
+  wrap(async (req, res) => {
+    const fields = ['name', 'kind', 'start_date', 'end_date', 'price', 'adjust', 'percent', 'min_stay', 'priority'];
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    for (const f of fields) {
+      if (req.body[f] !== undefined) { sets.push(`${f} = $${i++}`); vals.push(req.body[f]); }
+    }
+    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(req.params.id, req.accountId);
+    const { rows } = await query(
+      `UPDATE pricing_rules SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Pricing rule not found' });
+    res.json(rows[0]);
   })
 );
 
@@ -892,6 +945,68 @@ app.delete(
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Pricing rule not found' });
     res.json({ deleted: true });
+  })
+);
+
+// Dynamic-pricing engine: compute nightly price + min-stay for a date window.
+app.get(
+  '/api/pricing/preview',
+  auth,
+  wrap(async (req, res) => {
+    const propertyId = req.query.property_id;
+    const days = Math.min(120, Math.max(7, Number(req.query.days) || 45));
+    const prop = (await query('SELECT id, name, base_price FROM properties WHERE id = $1 AND user_id = $2', [propertyId, req.accountId])).rows[0];
+    if (!prop) return res.status(404).json({ error: 'Property not found' });
+    const base = Number(prop.base_price || 0);
+
+    const rules = (await query('SELECT * FROM pricing_rules WHERE user_id = $1 AND property_id = $2 ORDER BY priority ASC', [req.accountId, propertyId])).rows;
+    const bookings = (await query(
+      `SELECT check_in, check_out FROM bookings WHERE user_id = $1 AND property_id = $2 AND status <> 'cancelled'`,
+      [req.accountId, propertyId]
+    )).rows;
+
+    const isoOf = (v) => {
+      if (!v) return null;
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      return String(v).slice(0, 10);
+    };
+    const isBooked = (d) => bookings.some((b) => d >= isoOf(b.check_in) && d < isoOf(b.check_out));
+    const inRange = (r, d) => (!r.start_date || d >= isoOf(r.start_date)) && (!r.end_date || d <= isoOf(r.end_date));
+
+    const out = [];
+    const today = new Date();
+    for (let k = 0; k < days; k += 1) {
+      const dt = new Date(today.getFullYear(), today.getMonth(), today.getDate() + k);
+      const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      const dow = dt.getDay(); // 0 Sun .. 6 Sat
+      const isWeekend = dow === 5 || dow === 6;
+      let price = base;
+      let minStay = 1;
+      const applied = [];
+      // Rules apply in priority order; later (higher priority) can override/stack.
+      for (const r of rules) {
+        const matches =
+          (r.kind === 'weekend' && isWeekend) ||
+          (r.kind !== 'weekend' && inRange(r, iso));
+        if (!matches) continue;
+        if (r.adjust === 'percent' && r.percent != null) {
+          price = price * (1 + Number(r.percent) / 100);
+        } else if (r.price != null) {
+          price = Number(r.price);
+        }
+        if (r.min_stay && r.min_stay > minStay) minStay = r.min_stay;
+        applied.push(r.name);
+      }
+      out.push({
+        date: iso,
+        weekend: isWeekend,
+        price: Math.round(price),
+        min_stay: minStay,
+        booked: isBooked(iso),
+        rules: applied,
+      });
+    }
+    res.json({ property: prop.name, base, days: out });
   })
 );
 

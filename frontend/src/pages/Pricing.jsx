@@ -1,9 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import api, { apiError } from '../api';
 import { Modal, Loading, Empty, money, localDate } from '../components/ui.jsx';
 
-const BLANK = { property_id: '', name: '', start_date: '', end_date: '', price: 0, min_stay: 1 };
+const BLANK = {
+  property_id: '',
+  name: '',
+  kind: 'seasonal',
+  adjust: 'fixed',
+  start_date: '',
+  end_date: '',
+  price: 0,
+  percent: 0,
+  min_stay: 1,
+};
+
+const KIND_LABEL = { seasonal: 'Seasonal', weekend: 'Weekend' };
 
 export default function Pricing() {
   const [rules, setRules] = useState([]);
@@ -13,12 +25,15 @@ export default function Pricing() {
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(BLANK);
   const [busy, setBusy] = useState(false);
+  const [selProp, setSelProp] = useState('');
+  const [preview, setPreview] = useState(null);
 
   const load = () =>
     Promise.all([api.get('/api/pricing'), api.get('/api/properties')])
       .then(([r, p]) => {
         setRules(r.data);
         setProperties(p.data);
+        if (!selProp && p.data.length) setSelProp(p.data[0].id);
       })
       .catch((e) => setError(apiError(e)))
       .finally(() => setLoading(false));
@@ -27,12 +42,18 @@ export default function Pricing() {
     load();
   }, []);
 
+  const loadPreview = (pid) => {
+    if (!pid) return;
+    api.get(`/api/pricing/preview?property_id=${pid}&days=45`).then((r) => setPreview(r.data)).catch(() => setPreview(null));
+  };
+
+  useEffect(() => {
+    if (selProp) loadPreview(selProp);
+  }, [selProp, rules]);
+
   const openNew = () => {
-    if (!properties.length) {
-      setError('Add a property first.');
-      return;
-    }
-    setForm({ ...BLANK, property_id: properties[0].id });
+    if (!properties.length) { setError('Add a property first.'); return; }
+    setForm({ ...BLANK, property_id: selProp || properties[0].id });
     setShowModal(true);
   };
 
@@ -41,7 +62,9 @@ export default function Pricing() {
     setBusy(true);
     setError('');
     try {
-      await api.post('/api/pricing', form);
+      const payload = { ...form };
+      if (form.kind === 'weekend') { payload.start_date = null; payload.end_date = null; }
+      await api.post('/api/pricing', payload);
       setShowModal(false);
       await load();
     } catch (err) {
@@ -53,67 +76,81 @@ export default function Pricing() {
 
   const remove = async (r) => {
     if (!confirm(`Delete pricing rule "${r.name}"?`)) return;
-    try {
-      await api.delete(`/api/pricing/${r.id}`);
-      await load();
-    } catch (err) {
-      setError(apiError(err));
-    }
+    await api.delete(`/api/pricing/${r.id}`);
+    await load();
   };
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const propRules = useMemo(() => rules.filter((r) => !selProp || r.property_id === selProp), [rules, selProp]);
+  const avgPrice = preview ? Math.round(preview.days.reduce((s, d) => s + d.price, 0) / preview.days.length) : 0;
+
+  const ruleValue = (r) =>
+    r.adjust === 'percent' ? `${Number(r.percent) > 0 ? '+' : ''}${r.percent}%` : money(r.price);
 
   if (loading) return <Loading />;
 
   return (
     <>
       <div className="page-header">
-        <p className="subtitle">Seasonal rates and minimum-stay rules</p>
+        <p className="subtitle">Dynamic pricing — seasonal rates, weekend uplift & minimum stays</p>
         <button className="btn" onClick={openNew}>+ Add rule</button>
       </div>
 
       {error && <div className="alert error">{error}</div>}
 
+      <div className="row wrap" style={{ marginBottom: 16 }}>
+        <select style={{ width: 'auto' }} value={selProp} onChange={(e) => setSelProp(e.target.value)}>
+          {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        {preview && <span className="muted" style={{ alignSelf: 'center' }}>Base {money(preview.base)} · avg next 45 nights <strong>{money(avgPrice)}</strong></span>}
+      </div>
+
+      {/* Price preview calendar */}
+      {preview && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card-header"><h3>Price calendar — next 45 nights</h3>
+            <div className="row" style={{ gap: 14, fontSize: 12 }}>
+              <span className="muted">▮ weekend</span><span className="muted">✕ booked</span>
+            </div>
+          </div>
+          <div className="card-body">
+            <div className="price-grid">
+              {preview.days.map((d) => (
+                <div key={d.date} className={`price-cell ${d.weekend ? 'weekend' : ''} ${d.booked ? 'booked' : ''}`} title={`${d.date}${d.rules.length ? ' · ' + d.rules.join(', ') : ''}${d.min_stay > 1 ? ' · min ' + d.min_stay : ''}`}>
+                  <div className="pc-day">{format(localDate(d.date), 'EEE d')}</div>
+                  <div className="pc-price">{d.booked ? '✕' : money(d.price)}</div>
+                  {d.min_stay > 1 && !d.booked && <div className="pc-min">min {d.min_stay}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="card">
-        {rules.length === 0 ? (
-          <Empty
-            icon="💲"
-            title="No pricing rules"
-            subtitle="Set seasonal rates so the right price applies automatically."
-            action={<button className="btn" onClick={openNew}>+ Add rule</button>}
-          />
+        <div className="card-header"><h3>Rules</h3></div>
+        {propRules.length === 0 ? (
+          <Empty icon="💲" title="No pricing rules" subtitle="Add seasonal rates, a weekend uplift, or minimum stays." action={<button className="btn" onClick={openNew}>+ Add rule</button>} />
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
-                <tr>
-                  <th>Rule</th>
-                  <th>Property</th>
-                  <th>Dates</th>
-                  <th>Price / night</th>
-                  <th>Min stay</th>
-                  <th></th>
-                </tr>
+                <tr><th>Rule</th><th>Type</th><th>When</th><th>Adjustment</th><th>Min stay</th><th></th></tr>
               </thead>
               <tbody>
-                {rules.map((r) => (
+                {propRules.map((r) => (
                   <tr key={r.id}>
                     <td>{r.name}</td>
-                    <td>{r.property_name}</td>
+                    <td><span className="badge direct">{KIND_LABEL[r.kind] || r.kind}</span></td>
                     <td>
-                      {r.start_date
-                        ? `${format(localDate(r.start_date), 'MMM d')} – ${
-                            r.end_date ? format(localDate(r.end_date), 'MMM d, yyyy') : '…'
-                          }`
+                      {r.kind === 'weekend' ? 'Fri & Sat'
+                        : r.start_date ? `${format(localDate(r.start_date), 'MMM d')} – ${r.end_date ? format(localDate(r.end_date), 'MMM d') : '…'}`
                         : 'Always'}
                     </td>
-                    <td>{money(r.price)}</td>
+                    <td style={{ fontWeight: 600 }}>{ruleValue(r)}</td>
                     <td>{r.min_stay} night{r.min_stay > 1 ? 's' : ''}</td>
-                    <td>
-                      <button className="btn ghost sm" onClick={() => remove(r)} style={{ color: 'var(--danger)' }}>
-                        Delete
-                      </button>
-                    </td>
+                    <td><button className="btn ghost sm" onClick={() => remove(r)} style={{ color: 'var(--danger)' }}>Delete</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -126,43 +163,46 @@ export default function Pricing() {
         <Modal
           title="Add pricing rule"
           onClose={() => setShowModal(false)}
-          footer={
-            <>
-              <button className="btn secondary" onClick={() => setShowModal(false)}>Cancel</button>
-              <button className="btn" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save rule'}</button>
-            </>
-          }
+          footer={<><button className="btn secondary" onClick={() => setShowModal(false)}>Cancel</button><button className="btn" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save rule'}</button></>}
         >
           <form onSubmit={save}>
             <div className="form-grid">
               <div className="field full">
                 <label>Property *</label>
                 <select value={form.property_id} onChange={set('property_id')} required>
-                  {properties.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
+                  {properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>Rule type</label>
+                <select value={form.kind} onChange={set('kind')}>
+                  <option value="seasonal">Seasonal (date range)</option>
+                  <option value="weekend">Weekend uplift (Fri/Sat)</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Adjustment</label>
+                <select value={form.adjust} onChange={set('adjust')}>
+                  <option value="fixed">Fixed nightly price</option>
+                  <option value="percent">Percent change</option>
                 </select>
               </div>
               <div className="field full">
-                <label>Rule name *</label>
-                <input value={form.name} onChange={set('name')} placeholder="Summer peak" required />
+                <label>Name *</label>
+                <input value={form.name} onChange={set('name')} placeholder="Summer peak / Weekend uplift" required />
               </div>
-              <div className="field">
-                <label>Start date</label>
-                <input type="date" value={form.start_date} onChange={set('start_date')} />
-              </div>
-              <div className="field">
-                <label>End date</label>
-                <input type="date" value={form.end_date} onChange={set('end_date')} />
-              </div>
-              <div className="field">
-                <label>Price / night ($) *</label>
-                <input type="number" min="0" step="0.01" value={form.price} onChange={set('price')} required />
-              </div>
-              <div className="field">
-                <label>Minimum stay (nights)</label>
-                <input type="number" min="1" value={form.min_stay} onChange={set('min_stay')} />
-              </div>
+              {form.kind !== 'weekend' && (
+                <>
+                  <div className="field"><label>Start date</label><input type="date" value={form.start_date} onChange={set('start_date')} /></div>
+                  <div className="field"><label>End date</label><input type="date" value={form.end_date} onChange={set('end_date')} /></div>
+                </>
+              )}
+              {form.adjust === 'fixed' ? (
+                <div className="field"><label>Nightly price ($) *</label><input type="number" min="0" step="0.01" value={form.price} onChange={set('price')} required /></div>
+              ) : (
+                <div className="field"><label>Percent change (%) *</label><input type="number" step="1" value={form.percent} onChange={set('percent')} placeholder="e.g. 20 or -10" required /></div>
+              )}
+              <div className="field"><label>Minimum stay (nights)</label><input type="number" min="1" value={form.min_stay} onChange={set('min_stay')} /></div>
             </div>
             <button type="submit" style={{ display: 'none' }} />
           </form>
