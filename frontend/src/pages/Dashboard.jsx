@@ -4,13 +4,14 @@ import { format, differenceInCalendarDays } from 'date-fns';
 import api, { apiError } from '../api';
 import { Loading, Empty, money, Badge, localDate } from '../components/ui.jsx';
 import Onboarding from '../components/Onboarding.jsx';
+import Icon from '../components/Icon.jsx';
 
-const PLATFORM_COLORS = { airbnb: 'var(--airbnb)', vrbo: 'var(--vrbo)', direct: 'var(--primary)' };
+const PLATFORM_COLORS = { airbnb: 'var(--airbnb)', vrbo: 'var(--vrbo)', booking: 'var(--booking)', direct: 'var(--primary)' };
 
-function StatCard({ to, label, value, cls, sub }) {
+function StatCard({ to, icon, label, value, cls, sub }) {
   return (
     <Link to={to} className="stat stat-link">
-      <div className="label">{label}</div>
+      <div className="label"><span className="stat-ico"><Icon name={icon} size={16} /></span>{label}</div>
       <div className={`value ${cls || ''}`}>{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}
     </Link>
@@ -73,7 +74,7 @@ export default function Dashboard() {
       <h3 style={{ marginBottom: 12 }}>Today at a glance</h3>
       <div className="ops-grid">
         <div className="ops-card">
-          <div className="ops-head">🛬 Today's check-ins</div>
+          <div className="ops-head"><Icon name="calendarCheck" size={15} /> Today's check-ins</div>
           <div className="ops-count">{checkinsToday.length}</div>
           {checkinsToday.slice(0, 2).map((b) => (
             <div key={b.id} className="ops-item">{b.guest_name} · {b.property_name}</div>
@@ -81,7 +82,7 @@ export default function Dashboard() {
           {checkinsToday.length === 0 && <div className="ops-empty">No arrivals today</div>}
         </div>
         <div className="ops-card">
-          <div className="ops-head">🛫 Today's check-outs</div>
+          <div className="ops-head"><Icon name="calendar" size={15} /> Today's check-outs</div>
           <div className="ops-count">{checkoutsToday.length}</div>
           {checkoutsToday.slice(0, 2).map((b) => (
             <div key={b.id} className="ops-item">{b.guest_name} · {b.property_name}</div>
@@ -89,7 +90,7 @@ export default function Dashboard() {
           {checkoutsToday.length === 0 && <div className="ops-empty">No departures today</div>}
         </div>
         <div className="ops-card">
-          <div className="ops-head">🏠 Currently staying</div>
+          <div className="ops-head"><Icon name="home" size={15} /> Currently staying</div>
           <div className="ops-count">{stayingNow.length}</div>
           {stayingNow.slice(0, 2).map((b) => (
             <div key={b.id} className="ops-item">{b.guest_name} · {b.property_name}</div>
@@ -97,7 +98,7 @@ export default function Dashboard() {
           {stayingNow.length === 0 && <div className="ops-empty">No in-house guests</div>}
         </div>
         <Link to="/bookings?status=pending" className="ops-card" style={{ display: 'block' }}>
-          <div className="ops-head">⏳ Needs approval</div>
+          <div className="ops-head"><Icon name="check" size={15} /> Needs approval</div>
           <div className="ops-count" style={{ color: needsApproval.length ? 'var(--warning)' : 'inherit' }}>{needsApproval.length}</div>
           {needsApproval.slice(0, 2).map((b) => (
             <div key={b.id} className="ops-item">{b.guest_name} · {b.property_name}</div>
@@ -107,14 +108,15 @@ export default function Dashboard() {
       </div>
 
       <div className="stats-grid">
-        <StatCard to="/properties" label="🏠 Properties" value={stats.properties} sub="Manage listings" />
-        <StatCard to="/bookings" label="📅 Bookings" value={stats.bookings} sub={`${stats.upcoming} upcoming`} />
-        <StatCard to="/calendar" label="🌙 Nights booked" value={stats.nightsBooked} sub="View calendar" />
-        <StatCard to="/finances" label="💵 Revenue" value={money(stats.revenue)} cls="pos" sub="Finances" />
-        <StatCard to="/finances" label="🧾 Expenses" value={money(stats.expenses)} sub="Finances" />
+        <StatCard to="/properties" icon="home" label="Properties" value={stats.properties} sub="Manage listings" />
+        <StatCard to="/bookings" icon="calendarCheck" label="Bookings" value={stats.bookings} sub={`${stats.upcoming} upcoming`} />
+        <StatCard to="/calendar" icon="calendar" label="Nights booked" value={stats.nightsBooked} sub="View calendar" />
+        <StatCard to="/finances" icon="wallet" label="Revenue" value={money(stats.revenue)} cls="pos" sub="Finances" />
+        <StatCard to="/finances" icon="file" label="Expenses" value={money(stats.expenses)} sub="Finances" />
         <StatCard
           to="/finances"
-          label="📈 Profit"
+          icon="chart"
+          label="Profit"
           value={money(stats.profit)}
           cls={stats.profit >= 0 ? 'pos' : 'neg'}
           sub={`${margin}% margin`}
