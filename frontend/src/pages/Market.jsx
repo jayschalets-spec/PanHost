@@ -22,6 +22,19 @@ export default function Market() {
       .finally(() => setLoading(false));
   }, []);
 
+  const [applied, setApplied] = useState(false);
+
+  const applySuggested = async () => {
+    if (!data?.suggested) return;
+    try {
+      await api.put(`/api/properties/${selProp}`, { base_price: data.suggested });
+      setApplied(true);
+      setTimeout(() => setApplied(false), 2500);
+    } catch (err) {
+      setError(apiError(err));
+    }
+  };
+
   const analyze = async () => {
     setAnalyzing(true);
     setError('');
@@ -90,10 +103,17 @@ export default function Market() {
             </div>
           </div>
 
-          <div className="alert info">
-            💡 Suggested nightly rate for this market: <strong>{money(data.suggested)}</strong>
-            {data.ourPrice > 0 && data.suggested > 0 && (
-              <> — you're currently {data.ourPrice < data.suggested ? `${Math.round((1 - data.ourPrice / data.suggested) * 100)}% below` : `${Math.round((data.ourPrice / data.suggested - 1) * 100)}% above`} the market median.</>
+          <div className="alert info" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <span>
+              💡 Suggested nightly rate for this market: <strong>{money(data.suggested)}</strong>
+              {data.ourPrice > 0 && data.suggested > 0 && (
+                <> — you're currently {data.ourPrice < data.suggested ? `${Math.round((1 - data.ourPrice / data.suggested) * 100)}% below` : `${Math.round((data.ourPrice / data.suggested - 1) * 100)}% above`} the market median.</>
+              )}
+            </span>
+            {data.suggested > 0 && (
+              <button className="btn sm" onClick={applySuggested} disabled={applied}>
+                {applied ? '✅ Applied' : 'Set as base price'}
+              </button>
             )}
           </div>
 
