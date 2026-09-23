@@ -83,13 +83,14 @@ export default function Pricing() {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const currentProp = useMemo(() => properties.find((p) => p.id === selProp), [properties, selProp]);
-  const [smart, setSmart] = useState({ min_price: 0, demand_pricing: false, demand_strength: 20 });
+  const [smart, setSmart] = useState({ min_price: 0, demand_pricing: false, demand_strength: 20, market_anchor: false });
   useEffect(() => {
     if (currentProp) {
       setSmart({
         min_price: currentProp.min_price ?? 0,
         demand_pricing: !!currentProp.demand_pricing,
         demand_strength: currentProp.demand_strength ?? 20,
+        market_anchor: !!currentProp.market_anchor,
       });
     }
   }, [currentProp]);
@@ -138,6 +139,10 @@ export default function Pricing() {
               <label className="row" style={{ gap: 8, cursor: 'pointer' }}>
                 <input type="checkbox" style={{ width: 'auto' }} checked={smart.demand_pricing} onChange={(e) => saveSmart({ demand_pricing: e.target.checked })} />
                 <strong>⚡ Smart demand pricing</strong>
+              </label>
+              <label className="row" style={{ gap: 8, cursor: 'pointer' }} title={currentProp?.market_median ? `Market median $${Math.round(currentProp.market_median)}` : 'Run Market analysis first'}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={smart.market_anchor} disabled={!currentProp?.market_median} onChange={(e) => saveSmart({ market_anchor: e.target.checked })} />
+                <strong>📡 Anchor to market{currentProp?.market_median ? ` ($${Math.round(currentProp.market_median)})` : ''}</strong>
               </label>
               {smart.demand_pricing && (
                 <label className="row" style={{ gap: 8 }}>

@@ -88,6 +88,9 @@ ALTER TABLE properties ADD COLUMN IF NOT EXISTS demand_pricing BOOLEAN DEFAULT f
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS demand_strength INTEGER DEFAULT 20;
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS lat NUMERIC(9,6);
 ALTER TABLE properties ADD COLUMN IF NOT EXISTS lng NUMERIC(9,6);
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS market_median NUMERIC(10,2);
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS market_updated_at TIMESTAMPTZ;
+ALTER TABLE properties ADD COLUMN IF NOT EXISTS market_anchor BOOLEAN DEFAULT false;
 
 -- ---------------------------------------------------------------------------
 -- bookings

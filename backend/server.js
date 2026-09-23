@@ -283,6 +283,7 @@ app.put(
       'min_price',
       'demand_pricing',
       'demand_strength',
+      'market_anchor',
       'description',
       'amenities',
       'photos',
@@ -959,7 +960,7 @@ app.get(
     const propertyId = req.query.property_id;
     const days = Math.min(120, Math.max(7, Number(req.query.days) || 45));
     const prop = (await query(
-      'SELECT id, name, base_price, min_price, demand_pricing, demand_strength FROM properties WHERE id = $1 AND user_id = $2',
+      'SELECT id, name, base_price, min_price, demand_pricing, demand_strength, market_anchor, market_median FROM properties WHERE id = $1 AND user_id = $2',
       [propertyId, req.accountId]
     )).rows[0];
     if (!prop) return res.status(404).json({ error: 'Property not found' });
@@ -967,6 +968,10 @@ app.get(
     const floor = Number(prop.min_price || 0);
     const demandOn = prop.demand_pricing;
     const strength = Number(prop.demand_strength || 20);
+    const marketMedian = Number(prop.market_median || 0);
+    const anchor = prop.market_anchor && marketMedian > 0;
+    // Reference price: the real market median (when anchoring), else your base.
+    const ref = anchor ? marketMedian : base;
 
     const rules = (await query('SELECT * FROM pricing_rules WHERE user_id = $1 AND property_id = $2 ORDER BY priority ASC', [req.accountId, propertyId])).rows;
     const bookings = (await query(
@@ -1004,13 +1009,14 @@ app.get(
       const dow = dt.getDay();
       const isWeekend = dow === 5 || dow === 6;
       const dUntil = daysUntil(dt);
-      let price = base;
+      let price = ref;
       let minStay = 1;
       const applied = [];
       let demandPct = 0;
+      if (anchor) applied.push(`Market $${Math.round(marketMedian)}`);
 
       // 1) Demand-based auto adjustment (occupancy pace + lead time).
-      if (demandOn && base > 0) {
+      if (demandOn && ref > 0) {
         const occ = occAround(dt);
         let signal = (occ - 0.5) * 2; // -1..+1
         if (dUntil <= 7) signal -= 0.5; // last-minute softness
@@ -1040,7 +1046,7 @@ app.get(
 
       out.push({ date: iso, weekend: isWeekend, price: Math.round(price), min_stay: minStay, booked: isBooked(iso), demand: demandPct, rules: applied });
     }
-    res.json({ property: prop.name, base, min_price: floor, demand_pricing: demandOn, demand_strength: strength, days: out });
+    res.json({ property: prop.name, base, min_price: floor, demand_pricing: demandOn, demand_strength: strength, market_anchor: anchor, market_median: marketMedian, days: out });
   })
 );
 
@@ -1121,6 +1127,11 @@ app.get(
       const percentile = prices.length
         ? Math.round((prices.filter((p) => p <= ourPrice).length / prices.length) * 100)
         : null;
+
+      // Cache the market median so the pricing engine can anchor to it.
+      if (stats.median > 0) {
+        await query('UPDATE properties SET market_median = $1, market_updated_at = now() WHERE id = $2', [stats.median, prop.id]);
+      }
 
       res.json({
         location,
