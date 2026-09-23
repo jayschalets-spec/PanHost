@@ -1,15 +1,28 @@
 import { useEffect, useState } from 'react';
 import api, { apiError } from '../api';
 import { Modal, Loading, Empty, Badge } from '../components/ui.jsx';
+import { useAuth } from '../auth.jsx';
 
 const ROLES = ['cleaner', 'co-host', 'maintenance', 'owner'];
 const ROLE_ICON = { cleaner: '🧹', 'co-host': '🤝', maintenance: '🔧', owner: '👑' };
 const BLANK = { name: '', email: '', phone: '', role: 'cleaner' };
 
 export default function Team() {
+  const { user } = useAuth();
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [invited, setInvited] = useState({});
+
+  const invite = async (m) => {
+    setError('');
+    try {
+      await api.post(`/api/team/${m.id}/invite`);
+      setInvited((prev) => ({ ...prev, [m.id]: true }));
+    } catch (err) {
+      setError(apiError(err));
+    }
+  };
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(BLANK);
@@ -58,7 +71,9 @@ export default function Team() {
       {error && <div className="alert error">{error}</div>}
 
       <div className="alert info">
-        Assign team members to tasks. Scoped staff logins are on the roadmap — for now the roster powers task assignment and contact info.
+        Add a member's email, then <strong>Invite login</strong> to give them scoped access: cleaners &
+        maintenance see only Dashboard, Calendar, Tasks & Smart Locks; co-hosts manage everything except
+        billing/settings. They set their own password from the emailed invite.
       </div>
 
       {members.length === 0 ? (
@@ -79,7 +94,12 @@ export default function Team() {
                   {m.email && <div>✉️ {m.email}</div>}
                   {m.phone && <div>📞 {m.phone}</div>}
                 </div>
-                <div className="row" style={{ justifyContent: 'flex-end', marginTop: 10, gap: 6 }}>
+                <div className="row wrap" style={{ justifyContent: 'flex-end', marginTop: 10, gap: 6 }}>
+                  {user?.is_owner && m.email && (
+                    invited[m.id]
+                      ? <span className="badge confirmed">✉️ Invited</span>
+                      : <button className="btn ghost sm" onClick={() => invite(m)} title="Send login invite">✉️ Invite login</button>
+                  )}
                   <button className="btn ghost sm" onClick={() => { setEditing(m); setForm({ ...BLANK, ...m }); setShowModal(true); }}>Edit</button>
                   <button className="btn ghost sm" onClick={() => remove(m)} style={{ color: 'var(--danger)' }}>Remove</button>
                 </div>

@@ -26,6 +26,7 @@ import Billing from './pages/Billing.jsx';
 import Book from './pages/Book.jsx';
 import Guide from './pages/Guide.jsx';
 import Trip from './pages/Trip.jsx';
+import AcceptInvite from './pages/AcceptInvite.jsx';
 import { useState } from 'react';
 
 const PAGE_TITLES = {
@@ -116,6 +117,7 @@ function Router() {
       <Route path="/book/:hostId" element={<Book />} />
       <Route path="/guide/:propertyId" element={<Guide />} />
       <Route path="/trip/:bookingId" element={<Trip />} />
+      <Route path="/accept-invite" element={<AcceptInvite />} />
       <Route
         path="/login"
         element={

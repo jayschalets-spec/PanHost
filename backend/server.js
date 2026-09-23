@@ -38,7 +38,11 @@ const EXPENSE_CATEGORIES = [
 ];
 
 function signToken(user) {
-  return jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(
+    { id: user.id, email: user.email, owner_id: user.owner_id || null, role: user.role || 'owner' },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
 }
 
 function auth(req, res, next) {
@@ -47,10 +51,19 @@ function auth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Missing authorization token' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    // All account data is scoped to the owner. Staff act within their owner's account.
+    req.accountId = req.user.owner_id || req.user.id;
+    req.role = req.user.role || 'owner';
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+}
+
+// Restrict a route to account owners (not staff).
+function ownerOnly(req, res, next) {
+  if (req.user.owner_id) return res.status(403).json({ error: 'Owner access required' });
+  next();
 }
 
 // Wrap async route handlers so rejections become 500s instead of crashing.
@@ -129,14 +142,14 @@ app.post(
       return res.status(400).json({ error: 'email and password are required' });
     }
     const { rows } = await query(
-      'SELECT id, email, name, password_hash FROM users WHERE email = $1',
+      'SELECT id, email, name, password_hash, owner_id, role FROM users WHERE email = $1',
       [email.toLowerCase()]
     );
     const user = rows[0];
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-    const safe = { id: user.id, email: user.email, name: user.name };
+    const safe = { id: user.id, email: user.email, name: user.name, owner_id: user.owner_id, role: user.role };
     res.json({ token: signToken(safe), user: safe });
   })
 );
@@ -145,19 +158,22 @@ app.get(
   '/api/auth/me',
   auth,
   wrap(async (req, res) => {
-    const { rows } = await query(
-      'SELECT id, email, name, company, brand_name, brand_color, mgmt_fee_pct, currency, created_at FROM users WHERE id = $1',
-      [req.user.id]
+    // Identity comes from the logged-in user; branding/currency from the account owner.
+    const me = await query('SELECT id, email, name, role, owner_id, created_at FROM users WHERE id = $1', [req.user.id]);
+    if (!me.rows.length) return res.status(404).json({ error: 'User not found' });
+    const acct = await query(
+      'SELECT company, brand_name, brand_color, mgmt_fee_pct, currency FROM users WHERE id = $1',
+      [req.accountId]
     );
-    if (!rows.length) return res.status(404).json({ error: 'User not found' });
-    res.json(rows[0]);
+    res.json({ ...me.rows[0], ...(acct.rows[0] || {}), is_owner: !req.user.owner_id });
   })
 );
 
-// Update profile / white-label branding.
+// Update profile / white-label branding (owner only).
 app.put(
   '/api/branding',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const fields = ['name', 'company', 'brand_name', 'brand_color', 'mgmt_fee_pct', 'currency'];
     const sets = [];
@@ -170,7 +186,7 @@ app.put(
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.user.id);
+    vals.push(req.accountId);
     const { rows } = await query(
       `UPDATE users SET ${sets.join(', ')} WHERE id = $${i}
        RETURNING id, email, name, company, brand_name, brand_color, mgmt_fee_pct, currency`,
@@ -189,7 +205,7 @@ app.get(
   wrap(async (req, res) => {
     const { rows } = await query(
       'SELECT * FROM properties WHERE user_id = $1 ORDER BY created_at DESC',
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows);
   })
@@ -225,7 +241,7 @@ app.post(
          description, amenities, photos, airbnb_ical_url, vrbo_ical_url, booking_com_ical_url, airbnb_listing_id, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [
-        req.user.id,
+        req.accountId,
         name,
         address || null,
         city || null,
@@ -288,7 +304,7 @@ app.put(
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.params.id, req.user.id);
+    vals.push(req.params.id, req.accountId);
     const { rows } = await query(
       `UPDATE properties SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
       vals
@@ -304,7 +320,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM properties WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Property not found' });
     res.json({ deleted: true });
@@ -320,7 +336,7 @@ app.get(
   wrap(async (req, res) => {
     const { property_id, platform, status } = req.query;
     const clauses = ['b.user_id = $1'];
-    const vals = [req.user.id];
+    const vals = [req.accountId];
     let i = 2;
     if (property_id) {
       clauses.push(`b.property_id = $${i++}`);
@@ -369,7 +385,7 @@ app.post(
     // Ensure the property belongs to this user (multi-tenant isolation).
     const owns = await query('SELECT id FROM properties WHERE id = $1 AND user_id = $2', [
       property_id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!owns.rows.length) return res.status(404).json({ error: 'Property not found' });
 
@@ -378,7 +394,7 @@ app.post(
         (user_id, property_id, guest_name, guest_email, platform, check_in, check_out, guests, total_amount, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [
-        req.user.id,
+        req.accountId,
         property_id,
         guest_name,
         guest_email || null,
@@ -418,7 +434,7 @@ app.put(
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.params.id, req.user.id);
+    vals.push(req.params.id, req.accountId);
     const { rows } = await query(
       `UPDATE bookings SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
       vals
@@ -434,7 +450,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM bookings WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Booking not found' });
     res.json({ deleted: true });
@@ -449,7 +465,7 @@ app.post(
     const code = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
     const { rows } = await query(
       'UPDATE bookings SET door_code = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
-      [code, req.params.id, req.user.id]
+      [code, req.params.id, req.accountId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Booking not found' });
     res.json(rows[0]);
@@ -465,7 +481,7 @@ app.get(
   wrap(async (req, res) => {
     const { rows } = await query(
       'SELECT platform, property_ref, created_at FROM api_credentials WHERE user_id = $1',
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows); // never returns access_token
   })
@@ -480,7 +496,7 @@ async function saveCredential(req, res, platform) {
      ON CONFLICT (user_id, platform)
      DO UPDATE SET property_ref = EXCLUDED.property_ref, access_token = EXCLUDED.access_token
      RETURNING platform, property_ref, created_at`,
-    [req.user.id, platform, property_ref || null, access_token]
+    [req.accountId, platform, property_ref || null, access_token]
   );
   res.json(rows[0]);
 }
@@ -537,7 +553,7 @@ async function fetchExternalBookings(platform, credential) {
 async function syncPlatform(req, res, platform) {
   const cred = await query(
     'SELECT * FROM api_credentials WHERE user_id = $1 AND platform = $2',
-    [req.user.id, platform]
+    [req.accountId, platform]
   );
   if (!cred.rows.length) {
     return res.status(400).json({ error: `No ${platform} credentials connected` });
@@ -546,7 +562,7 @@ async function syncPlatform(req, res, platform) {
   // Pick the property to attach imported bookings to.
   const prop = await query(
     'SELECT id FROM properties WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
-    [req.user.id]
+    [req.accountId]
   );
   if (!prop.rows.length) {
     return res.status(400).json({ error: 'Add a property before syncing bookings' });
@@ -564,7 +580,7 @@ async function syncPlatform(req, res, platform) {
        DO NOTHING
        RETURNING id`,
       [
-        req.user.id,
+        req.accountId,
         propertyId,
         b.guest_name || 'Guest',
         b.guest_email || null,
@@ -626,7 +642,7 @@ app.post(
   wrap(async (req, res) => {
     const { rows: props } = await query(
       'SELECT id, name, airbnb_ical_url, vrbo_ical_url, booking_com_ical_url FROM properties WHERE user_id = $1',
-      [req.user.id]
+      [req.accountId]
     );
     const summary = [];
     let totalImported = 0;
@@ -641,7 +657,7 @@ app.post(
       ]) {
         if (!url) continue;
         try {
-          const r = await importIcal(req.user.id, p, platform, url);
+          const r = await importIcal(req.accountId, p, platform, url);
           totalImported += r.imported;
           totalFetched += r.fetched;
           summary.push({ property: p.name, platform, ...r });
@@ -707,7 +723,7 @@ app.post(
     // Attach imported reservations to the user's first property (or a named one).
     const prop = await query(
       'SELECT id FROM properties WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
-      [req.user.id]
+      [req.accountId]
     );
     if (!prop.rows.length) return res.status(400).json({ error: 'Add a property before syncing.' });
     try {
@@ -720,7 +736,7 @@ app.post(
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'confirmed')
            ON CONFLICT (user_id, platform, external_id) WHERE external_id IS NOT NULL DO NOTHING
            RETURNING id`,
-          [req.user.id, prop.rows[0].id, b.guest_name, b.guest_email, platform, b.external_id, b.check_in, b.check_out, b.guests, b.total_amount]
+          [req.accountId, prop.rows[0].id, b.guest_name, b.guest_email, platform, b.external_id, b.check_in, b.check_out, b.guests, b.total_amount]
         );
         if (result.rows.length) imported += 1;
       }
@@ -742,13 +758,13 @@ app.get(
     const props = await query(
       `SELECT id, name, airbnb_ical_url, vrbo_ical_url, booking_com_ical_url, airbnb_listing_id
          FROM properties WHERE user_id = $1 ORDER BY created_at DESC`,
-      [req.user.id]
+      [req.accountId]
     );
     const bookings = await query(
       `SELECT property_id, platform, COUNT(*)::int AS n
          FROM bookings WHERE user_id = $1 AND status <> 'cancelled'
         GROUP BY property_id, platform`,
-      [req.user.id]
+      [req.accountId]
     );
     const countFor = (pid, platform) =>
       bookings.rows.find((b) => b.property_id === pid && b.platform === platform)?.n || 0;
@@ -782,7 +798,7 @@ app.get(
          FROM bookings b JOIN properties p ON p.id = b.property_id
         WHERE b.user_id = $1 AND b.status <> 'cancelled'
         ORDER BY b.property_id, b.check_in`,
-      [req.user.id]
+      [req.accountId]
     );
     const overlaps = (a, b) =>
       new Date(a.check_in) < new Date(b.check_out) &&
@@ -821,7 +837,7 @@ app.get(
          JOIN properties p ON p.id = pr.property_id
         WHERE pr.user_id = $1
         ORDER BY pr.start_date NULLS LAST`,
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows);
   })
@@ -837,13 +853,13 @@ app.post(
     }
     const owns = await query('SELECT id FROM properties WHERE id = $1 AND user_id = $2', [
       property_id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!owns.rows.length) return res.status(404).json({ error: 'Property not found' });
     const { rows } = await query(
       `INSERT INTO pricing_rules (user_id, property_id, name, start_date, end_date, price, min_stay)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [req.user.id, property_id, name, start_date || null, end_date || null, price, min_stay || 1]
+      [req.accountId, property_id, name, start_date || null, end_date || null, price, min_stay || 1]
     );
     res.status(201).json(rows[0]);
   })
@@ -855,7 +871,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM pricing_rules WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Pricing rule not found' });
     res.json({ deleted: true });
@@ -875,7 +891,7 @@ app.get(
          LEFT JOIN properties p ON p.id = e.property_id
         WHERE e.user_id = $1
         ORDER BY e.spent_on DESC`,
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows);
   })
@@ -898,7 +914,7 @@ app.post(
       `INSERT INTO expenses (user_id, property_id, category, description, amount, spent_on, receipt_url)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [
-        req.user.id,
+        req.accountId,
         property_id || null,
         category,
         description || null,
@@ -917,7 +933,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM expenses WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Expense not found' });
     res.json({ deleted: true });
@@ -939,7 +955,7 @@ app.get(
          LEFT JOIN properties p ON p.id = m.property_id
         WHERE m.user_id = $1
         ORDER BY m.created_at DESC`,
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows);
   })
@@ -955,7 +971,7 @@ app.post(
       `INSERT INTO messages (user_id, property_id, booking_id, guest_name, platform, direction, body)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [
-        req.user.id,
+        req.accountId,
         property_id || null,
         booking_id || null,
         guest_name || null,
@@ -979,7 +995,7 @@ app.get(
   wrap(async (req, res) => {
     const { rows } = await query(
       'SELECT * FROM message_templates WHERE user_id = $1 ORDER BY created_at DESC',
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows);
   })
@@ -995,7 +1011,7 @@ app.post(
     const { rows } = await query(
       `INSERT INTO message_templates (user_id, name, body, trigger, active)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [req.user.id, name, body, trg, active !== false]
+      [req.accountId, name, body, trg, active !== false]
     );
     res.status(201).json(rows[0]);
   })
@@ -1016,7 +1032,7 @@ app.put(
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.params.id, req.user.id);
+    vals.push(req.params.id, req.accountId);
     const { rows } = await query(
       `UPDATE message_templates SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
       vals
@@ -1032,7 +1048,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM message_templates WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Template not found' });
     res.json({ deleted: true });
@@ -1048,7 +1064,7 @@ app.get(
   wrap(async (req, res) => {
     const { status } = req.query;
     const clauses = ['t.user_id = $1'];
-    const vals = [req.user.id];
+    const vals = [req.accountId];
     if (status) {
       clauses.push('t.status = $2');
       vals.push(status);
@@ -1075,7 +1091,7 @@ app.post(
       `INSERT INTO tasks (user_id, property_id, booking_id, title, type, assignee, due_date, notes, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [
-        req.user.id,
+        req.accountId,
         property_id || null,
         booking_id || null,
         title,
@@ -1105,7 +1121,7 @@ app.put(
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.params.id, req.user.id);
+    vals.push(req.params.id, req.accountId);
     const { rows } = await query(
       `UPDATE tasks SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
       vals
@@ -1121,7 +1137,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM tasks WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Task not found' });
     res.json({ deleted: true });
@@ -1137,20 +1153,20 @@ app.post(
       `SELECT b.id, b.property_id, b.check_out, b.guest_name, p.name AS property_name
          FROM bookings b JOIN properties p ON p.id = b.property_id
         WHERE b.user_id = $1 AND b.status <> 'cancelled' AND b.check_out >= CURRENT_DATE`,
-      [req.user.id]
+      [req.accountId]
     );
     let created = 0;
     for (const b of bookings) {
       const exists = await query(
         `SELECT id FROM tasks WHERE user_id = $1 AND booking_id = $2 AND type = 'cleaning'`,
-        [req.user.id, b.id]
+        [req.accountId, b.id]
       );
       if (exists.rows.length) continue;
       await query(
         `INSERT INTO tasks (user_id, property_id, booking_id, title, type, due_date, status)
          VALUES ($1,$2,$3,$4,'cleaning',$5,'open')`,
         [
-          req.user.id,
+          req.accountId,
           b.property_id,
           b.id,
           `Turnover clean — ${b.property_name}`,
@@ -1174,7 +1190,7 @@ app.get(
       `SELECT r.*, p.name AS property_name
          FROM reviews r LEFT JOIN properties p ON p.id = r.property_id
         WHERE r.user_id = $1 ORDER BY r.reviewed_on DESC`,
-      [req.user.id]
+      [req.accountId]
     );
     res.json(rows);
   })
@@ -1189,7 +1205,7 @@ app.post(
     const { rows } = await query(
       `INSERT INTO reviews (user_id, property_id, booking_id, guest_name, platform, rating, body, reviewed_on)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [req.user.id, property_id || null, booking_id || null, guest_name || null, platform || 'direct', r, body || null, reviewed_on || new Date().toISOString().slice(0, 10)]
+      [req.accountId, property_id || null, booking_id || null, guest_name || null, platform || 'direct', r, body || null, reviewed_on || new Date().toISOString().slice(0, 10)]
     );
     res.status(201).json(rows[0]);
   })
@@ -1202,7 +1218,7 @@ app.put(
     const { response } = req.body || {};
     const { rows } = await query(
       'UPDATE reviews SET response = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
-      [response ?? null, req.params.id, req.user.id]
+      [response ?? null, req.params.id, req.accountId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Review not found' });
     res.json(rows[0]);
@@ -1213,7 +1229,7 @@ app.delete(
   '/api/reviews/:id',
   auth,
   wrap(async (req, res) => {
-    const { rowCount } = await query('DELETE FROM reviews WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    const { rowCount } = await query('DELETE FROM reviews WHERE id = $1 AND user_id = $2', [req.params.id, req.accountId]);
     if (!rowCount) return res.status(404).json({ error: 'Review not found' });
     res.json({ deleted: true });
   })
@@ -1226,7 +1242,7 @@ app.get(
   '/api/team',
   auth,
   wrap(async (req, res) => {
-    const { rows } = await query('SELECT * FROM team_members WHERE user_id = $1 ORDER BY created_at', [req.user.id]);
+    const { rows } = await query('SELECT * FROM team_members WHERE user_id = $1 ORDER BY created_at', [req.accountId]);
     res.json(rows);
   })
 );
@@ -1239,14 +1255,14 @@ app.post(
     if (!name) return res.status(400).json({ error: 'name is required' });
     const { rows } = await query(
       'INSERT INTO team_members (user_id, name, email, phone, role) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-      [req.user.id, name, email || null, phone || null, role || 'cleaner']
+      [req.accountId, name, email || null, phone || null, role || 'cleaner']
     );
     // Confirmation email to the new team member.
     if (email) {
-      const owner = (await query('SELECT brand_name, company, name FROM users WHERE id = $1', [req.user.id])).rows[0] || {};
+      const owner = (await query('SELECT brand_name, company, name FROM users WHERE id = $1', [req.accountId])).rows[0] || {};
       const brand = owner.brand_name || owner.company || 'PanHost';
       sendEmail({
-        userId: req.user.id,
+        userId: req.accountId,
         to: email,
         subject: `You've been added to ${brand} on PanHost`,
         html: emailTemplate({
@@ -1277,7 +1293,7 @@ app.put(
       }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.params.id, req.user.id);
+    vals.push(req.params.id, req.accountId);
     const { rows } = await query(
       `UPDATE team_members SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
       vals
@@ -1291,9 +1307,85 @@ app.delete(
   '/api/team/:id',
   auth,
   wrap(async (req, res) => {
-    const { rowCount } = await query('DELETE FROM team_members WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    const { rowCount } = await query('DELETE FROM team_members WHERE id = $1 AND user_id = $2', [req.params.id, req.accountId]);
     if (!rowCount) return res.status(404).json({ error: 'Team member not found' });
     res.json({ deleted: true });
+  })
+);
+
+// Invite a team member to log in (creates a scoped staff user + emails a link).
+app.post(
+  '/api/team/:id/invite',
+  auth,
+  ownerOnly,
+  wrap(async (req, res) => {
+    const tm = (await query('SELECT * FROM team_members WHERE id = $1 AND user_id = $2', [req.params.id, req.accountId])).rows[0];
+    if (!tm) return res.status(404).json({ error: 'Team member not found' });
+    if (!tm.email) return res.status(400).json({ error: 'Add an email to this team member first' });
+
+    const existing = (await query('SELECT id, owner_id, invite_status FROM users WHERE email = $1', [tm.email.toLowerCase()])).rows[0];
+    if (existing && existing.invite_status === 'active') {
+      return res.status(409).json({ error: 'That email already has an active login' });
+    }
+    if (existing && existing.owner_id && existing.owner_id !== req.accountId) {
+      return res.status(409).json({ error: 'That email belongs to another account' });
+    }
+
+    const token = crypto.randomBytes(24).toString('hex');
+    if (existing) {
+      await query('UPDATE users SET invite_token = $1, invite_status = $2, role = $3, owner_id = $4, name = COALESCE(name,$5) WHERE id = $6',
+        [token, 'pending', tm.role, req.accountId, tm.name, existing.id]);
+    } else {
+      await query(
+        'INSERT INTO users (email, name, role, owner_id, invite_token, invite_status) VALUES ($1,$2,$3,$4,$5,$6)',
+        [tm.email.toLowerCase(), tm.name, tm.role, req.accountId, token, 'pending']
+      );
+    }
+
+    const owner = (await query('SELECT brand_name, company, name FROM users WHERE id = $1', [req.accountId])).rows[0] || {};
+    const brand = owner.brand_name || owner.company || 'PanHost';
+    const link = `${process.env.PUBLIC_URL || 'http://localhost:3000'}/accept-invite?token=${token}`;
+    await sendEmail({
+      userId: req.accountId,
+      to: tm.email,
+      subject: `${brand} invited you to PanHost`,
+      html: emailTemplate({
+        heading: `You're invited, ${(tm.name || '').split(' ')[0] || 'there'}!`,
+        lines: [
+          `${owner.name || 'Your host'} invited you to join <strong>${brand}</strong> on PanHost as <strong>${tm.role}</strong>.`,
+          'Click below to set your password and log in.',
+        ],
+        cta: { label: 'Accept invite', url: link },
+      }),
+    });
+    res.json({ ok: true, invited: tm.email, link });
+  })
+);
+
+// Public: look up an invite by token (for the accept page).
+app.get(
+  '/api/auth/invite/:token',
+  wrap(async (req, res) => {
+    const u = (await query("SELECT email, name, role, owner_id FROM users WHERE invite_token = $1 AND invite_status = 'pending'", [req.params.token])).rows[0];
+    if (!u) return res.status(404).json({ error: 'Invite not found or already used' });
+    const owner = (await query('SELECT brand_name, company FROM users WHERE id = $1', [u.owner_id])).rows[0] || {};
+    res.json({ email: u.email, name: u.name, role: u.role, brand: owner.brand_name || owner.company || 'PanHost' });
+  })
+);
+
+// Public: accept an invite — set password and activate the login.
+app.post(
+  '/api/auth/accept-invite',
+  wrap(async (req, res) => {
+    const { token, password } = req.body || {};
+    if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
+    const u = (await query("SELECT * FROM users WHERE invite_token = $1 AND invite_status = 'pending'", [token])).rows[0];
+    if (!u) return res.status(404).json({ error: 'Invite not found or already used' });
+    const hash = await bcrypt.hash(password, 10);
+    await query("UPDATE users SET password_hash = $1, invite_status = 'active', invite_token = NULL WHERE id = $2", [hash, u.id]);
+    const safe = { id: u.id, email: u.email, name: u.name, owner_id: u.owner_id, role: u.role };
+    res.json({ token: signToken(safe), user: safe });
   })
 );
 
@@ -1308,7 +1400,7 @@ app.get(
   wrap(async (req, res) => {
     const { rows } = await query(
       'SELECT recipient, subject, status, error, created_at FROM email_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-      [req.user.id]
+      [req.accountId]
     );
     res.json({ configured: emailConfigured, log: rows });
   })
@@ -1320,7 +1412,7 @@ app.post(
   wrap(async (req, res) => {
     const me = (await query('SELECT email, name FROM users WHERE id = $1', [req.user.id])).rows[0];
     const r = await sendEmail({
-      userId: req.user.id,
+      userId: req.accountId,
       to: me.email,
       subject: 'PanHost test email ✅',
       html: emailTemplate({
@@ -1408,7 +1500,7 @@ app.post(
   '/api/automations/run',
   auth,
   wrap(async (req, res) => {
-    const result = await runAutomationsForUser(req.user.id);
+    const result = await runAutomationsForUser(req.accountId);
     res.json(result);
   })
 );
@@ -1499,7 +1591,7 @@ app.get(
   '/api/notifications',
   auth,
   wrap(async (req, res) => {
-    const uid = req.user.id;
+    const uid = req.accountId;
     const items = [];
 
     // Pending approvals
@@ -1547,7 +1639,7 @@ app.get(
   '/api/onboarding',
   auth,
   wrap(async (req, res) => {
-    const uid = req.user.id;
+    const uid = req.accountId;
     const [props, bookings, templates, user] = await Promise.all([
       query('SELECT COUNT(*)::int AS n, COUNT(airbnb_ical_url)::int AS ical FROM properties WHERE user_id = $1', [uid]),
       query('SELECT COUNT(*)::int AS n FROM bookings WHERE user_id = $1', [uid]),
@@ -1582,14 +1674,14 @@ app.get(
     if (q.length < 2) return res.json({ results: [] });
     const like = `%${q}%`;
     const [props, bookings, invoices] = await Promise.all([
-      query('SELECT id, name FROM properties WHERE user_id = $1 AND name ILIKE $2 LIMIT 5', [req.user.id, like]),
+      query('SELECT id, name FROM properties WHERE user_id = $1 AND name ILIKE $2 LIMIT 5', [req.accountId, like]),
       query(
         `SELECT b.id, b.guest_name, b.check_in, p.name AS property_name
            FROM bookings b JOIN properties p ON p.id = b.property_id
           WHERE b.user_id = $1 AND (b.guest_name ILIKE $2 OR b.guest_email ILIKE $2) LIMIT 6`,
-        [req.user.id, like]
+        [req.accountId, like]
       ),
-      query('SELECT id, number, guest_name FROM invoices WHERE user_id = $1 AND (number ILIKE $2 OR guest_name ILIKE $2) LIMIT 4', [req.user.id, like]),
+      query('SELECT id, number, guest_name FROM invoices WHERE user_id = $1 AND (number ILIKE $2 OR guest_name ILIKE $2) LIMIT 4', [req.accountId, like]),
     ]);
     const results = [
       ...props.rows.map((p) => ({ type: 'listing', label: p.name, sub: 'Listing', to: '/properties' })),
@@ -1612,7 +1704,7 @@ app.get(
   '/api/dashboard',
   auth,
   wrap(async (req, res) => {
-    const uid = req.user.id;
+    const uid = req.accountId;
     const [props, bookings, expenses] = await Promise.all([
       query('SELECT COUNT(*)::int AS n FROM properties WHERE user_id = $1', [uid]),
       query(
@@ -1661,7 +1753,7 @@ app.get(
   '/api/analytics',
   auth,
   wrap(async (req, res) => {
-    const uid = req.user.id;
+    const uid = req.accountId;
     const [propsRes, bookingsRes, expensesRes, propListRes] = await Promise.all([
       query('SELECT COUNT(*)::int AS n FROM properties WHERE user_id = $1', [uid]),
       query(
@@ -1771,10 +1863,11 @@ app.get(
 app.get(
   '/api/invoices',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { status } = req.query;
     const clauses = ['i.user_id = $1'];
-    const vals = [req.user.id];
+    const vals = [req.accountId];
     if (status) {
       clauses.push('i.status = $2');
       vals.push(status);
@@ -1803,11 +1896,11 @@ app.post(
   wrap(async (req, res) => {
     const { property_id, booking_id, guest_name, amount, due_date, notes } = req.body || {};
     if (amount === undefined) return res.status(400).json({ error: 'amount is required' });
-    const number = await nextInvoiceNumber(req.user.id);
+    const number = await nextInvoiceNumber(req.accountId);
     const { rows } = await query(
       `INSERT INTO invoices (user_id, property_id, booking_id, number, guest_name, amount, due_date, notes)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [req.user.id, property_id || null, booking_id || null, number, guest_name || null, amount, due_date || null, notes || null]
+      [req.accountId, property_id || null, booking_id || null, number, guest_name || null, amount, due_date || null, notes || null]
     );
     res.status(201).json(rows[0]);
   })
@@ -1833,7 +1926,7 @@ app.put(
       vals.push(new Date().toISOString().slice(0, 10));
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    vals.push(req.params.id, req.user.id);
+    vals.push(req.params.id, req.accountId);
     const { rows } = await query(
       `UPDATE invoices SET ${sets.join(', ')} WHERE id = $${i++} AND user_id = $${i} RETURNING *`,
       vals
@@ -1849,7 +1942,7 @@ app.delete(
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM invoices WHERE id = $1 AND user_id = $2', [
       req.params.id,
-      req.user.id,
+      req.accountId,
     ]);
     if (!rowCount) return res.status(404).json({ error: 'Invoice not found' });
     res.json({ deleted: true });
@@ -1866,10 +1959,10 @@ app.post(
          FROM bookings b
          LEFT JOIN invoices i ON i.booking_id = b.id
         WHERE b.user_id = $1 AND b.status <> 'cancelled' AND i.id IS NULL AND b.total_amount > 0`,
-      [req.user.id]
+      [req.accountId]
     );
     let created = 0;
-    let seq = (await query('SELECT COUNT(*)::int AS n FROM invoices WHERE user_id = $1', [req.user.id]))
+    let seq = (await query('SELECT COUNT(*)::int AS n FROM invoices WHERE user_id = $1', [req.accountId]))
       .rows[0].n;
     for (const b of bookings) {
       seq += 1;
@@ -1878,7 +1971,7 @@ app.post(
          VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid')
          ON CONFLICT (user_id, booking_id) WHERE booking_id IS NOT NULL DO NOTHING`,
         [
-          req.user.id,
+          req.accountId,
           b.property_id,
           b.id,
           `INV-${String(seq).padStart(4, '0')}`,
@@ -1899,23 +1992,24 @@ app.post(
 app.get(
   '/api/statements',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const month = /^\d{4}-\d{2}$/.test(req.query.month || '')
       ? req.query.month
       : new Date().toISOString().slice(0, 7);
 
-    const userRow = await query('SELECT mgmt_fee_pct FROM users WHERE id = $1', [req.user.id]);
+    const userRow = await query('SELECT mgmt_fee_pct FROM users WHERE id = $1', [req.accountId]);
     const feePct = Number(userRow.rows[0]?.mgmt_fee_pct || 0);
 
-    const props = await query('SELECT id, name FROM properties WHERE user_id = $1', [req.user.id]);
+    const props = await query('SELECT id, name FROM properties WHERE user_id = $1', [req.accountId]);
     const bookings = await query(
       `SELECT property_id, total_amount, check_in FROM bookings
         WHERE user_id = $1 AND status <> 'cancelled'`,
-      [req.user.id]
+      [req.accountId]
     );
     const expenses = await query(
       `SELECT property_id, amount, spent_on FROM expenses WHERE user_id = $1`,
-      [req.user.id]
+      [req.accountId]
     );
 
     const inMonth = (d) => new Date(d).toISOString().slice(0, 7) === month;
@@ -1959,11 +2053,11 @@ app.get(
   '/api/webhook-info',
   auth,
   wrap(async (req, res) => {
-    let { rows } = await query('SELECT webhook_token FROM users WHERE id = $1', [req.user.id]);
+    let { rows } = await query('SELECT webhook_token FROM users WHERE id = $1', [req.accountId]);
     let token = rows[0]?.webhook_token;
     if (!token) {
       token = crypto.randomBytes(16).toString('hex');
-      await query('UPDATE users SET webhook_token = $1 WHERE id = $2', [token, req.user.id]);
+      await query('UPDATE users SET webhook_token = $1 WHERE id = $2', [token, req.accountId]);
     }
     res.json({ token, path: `/api/webhooks/reservations/${token}` });
   })
@@ -1975,7 +2069,7 @@ app.post(
   auth,
   wrap(async (req, res) => {
     const token = crypto.randomBytes(16).toString('hex');
-    await query('UPDATE users SET webhook_token = $1 WHERE id = $2', [token, req.user.id]);
+    await query('UPDATE users SET webhook_token = $1 WHERE id = $2', [token, req.accountId]);
     res.json({ token, path: `/api/webhooks/reservations/${token}` });
   })
 );

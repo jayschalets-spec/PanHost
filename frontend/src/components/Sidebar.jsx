@@ -11,25 +11,28 @@ function readTheme() {
   }
 }
 
+// roles omitted = visible to everyone. Otherwise restricted to listed roles.
+const OPS = ['owner', 'co-host', 'cleaner', 'maintenance'];
+const MGMT = ['owner', 'co-host'];
 const LINKS = [
   { to: '/', label: 'Dashboard', icon: '📊', end: true },
-  { to: '/messages', label: 'Inbox', icon: '💬' },
-  { to: '/properties', label: 'Listings', icon: '🏠' },
-  { to: '/bookings', label: 'Reservations', icon: '📅' },
-  { to: '/guests', label: 'Guests', icon: '👥' },
-  { to: '/calendar', label: 'Calendar', icon: '🗓️' },
-  { to: '/channels', label: 'Channel Manager', icon: '🔌' },
-  { to: '/reviews', label: 'Reviews', icon: '⭐' },
-  { to: '/tasks', label: 'Tasks', icon: '✅' },
-  { to: '/smart-locks', label: 'Smart Locks', icon: '🔐' },
-  { to: '/team', label: 'Team', icon: '🧑‍🤝‍🧑' },
-  { to: '/pricing', label: 'Pricing', icon: '💲' },
-  { to: '/finances', label: 'Finances', icon: '💰' },
-  { to: '/billing', label: 'Billing', icon: '💳' },
-  { to: '/statements', label: 'Statements', icon: '🧾' },
-  { to: '/analytics', label: 'Analytics', icon: '📈' },
-  { to: '/automations', label: 'Automations', icon: '⚡' },
-  { to: '/settings', label: 'Settings', icon: '⚙️' },
+  { to: '/messages', label: 'Inbox', icon: '💬', roles: MGMT },
+  { to: '/properties', label: 'Listings', icon: '🏠', roles: MGMT },
+  { to: '/bookings', label: 'Reservations', icon: '📅', roles: MGMT },
+  { to: '/guests', label: 'Guests', icon: '👥', roles: MGMT },
+  { to: '/calendar', label: 'Calendar', icon: '🗓️', roles: OPS },
+  { to: '/channels', label: 'Channel Manager', icon: '🔌', roles: MGMT },
+  { to: '/reviews', label: 'Reviews', icon: '⭐', roles: MGMT },
+  { to: '/tasks', label: 'Tasks', icon: '✅', roles: OPS },
+  { to: '/smart-locks', label: 'Smart Locks', icon: '🔐', roles: OPS },
+  { to: '/team', label: 'Team', icon: '🧑‍🤝‍🧑', roles: MGMT },
+  { to: '/pricing', label: 'Pricing', icon: '💲', roles: MGMT },
+  { to: '/finances', label: 'Finances', icon: '💰', roles: ['owner'] },
+  { to: '/billing', label: 'Billing', icon: '💳', roles: ['owner'] },
+  { to: '/statements', label: 'Statements', icon: '🧾', roles: ['owner'] },
+  { to: '/analytics', label: 'Analytics', icon: '📈', roles: MGMT },
+  { to: '/automations', label: 'Automations', icon: '⚡', roles: MGMT },
+  { to: '/settings', label: 'Settings', icon: '⚙️', roles: ['owner'] },
 ];
 
 export default function Sidebar({ open, onClose }) {
@@ -54,7 +57,7 @@ export default function Sidebar({ open, onClose }) {
         <span>{user?.brand_name || 'PanHost'}</span>
       </div>
       <nav>
-        {LINKS.map((l) => (
+        {LINKS.filter((l) => !l.roles || l.roles.includes(user?.role || 'owner')).map((l) => (
           <NavLink
             key={l.to}
             to={l.to}
@@ -68,7 +71,12 @@ export default function Sidebar({ open, onClose }) {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <div className="email">{user?.name || user?.email}</div>
+        <div className="email">
+          {user?.name || user?.email}
+          {user && !user.is_owner && user.role && (
+            <span className="badge direct" style={{ marginLeft: 6, textTransform: 'capitalize' }}>{user.role}</span>
+          )}
+        </div>
         <button className="btn secondary sm block" onClick={toggleTheme} style={{ marginBottom: 8 }}>
           {theme === 'dark' ? '☀️ Light mode' : '🌙 Dark mode'}
         </button>

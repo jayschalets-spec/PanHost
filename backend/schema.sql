@@ -10,7 +10,7 @@
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email         TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
+    password_hash TEXT,  -- NULL until a pending invite is accepted
     name          TEXT,
     company       TEXT,
     brand_name    TEXT,
@@ -18,9 +18,18 @@ CREATE TABLE IF NOT EXISTS users (
     mgmt_fee_pct  NUMERIC(5,2) DEFAULT 0,
     currency      TEXT DEFAULT 'USD',
     webhook_token TEXT,
+    owner_id      UUID,                       -- NULL = account owner; else the owner this staff belongs to
+    role          TEXT NOT NULL DEFAULT 'owner', -- owner | co-host | cleaner | maintenance
+    invite_token  TEXT,
+    invite_status TEXT,                        -- pending | active
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE users ADD COLUMN IF NOT EXISTS webhook_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id UUID;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'owner';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_status TEXT;
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS company TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS brand_name TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS brand_color TEXT;
