@@ -92,13 +92,32 @@ export default function Finances() {
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  const exportPnl = () => {
+    const rows = [['Profit & Loss', new Date().toLocaleDateString()], [], ['Revenue', stats.revenue]];
+    rows.push([], ['Expenses by category', '']);
+    CATEGORIES.filter((c) => byCategory[c]).forEach((c) => rows.push([c, byCategory[c]]));
+    rows.push(['Total expenses', stats.expenses], [], ['Net profit', stats.profit], ['Margin', `${stats.revenue > 0 ? Math.round((stats.profit / stats.revenue) * 100) : 0}%`]);
+    rows.push([], ['Expense detail'], ['Date', 'Category', 'Property', 'Description', 'Amount']);
+    expenses.forEach((x) => rows.push([localDate(x.spent_on).toISOString().slice(0, 10), x.category, x.property_name || '', x.description || '', x.amount]));
+    const csv = rows.map((r) => r.map((c) => (/[",\n]/.test(String(c)) ? `"${String(c).replace(/"/g, '""')}"` : c)).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pnl-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) return <Loading />;
 
   return (
     <>
       <div className="page-header">
         <p className="subtitle">Revenue, expenses, and profitability</p>
-        <button className="btn" onClick={openNew}>+ Add expense</button>
+        <div className="row">
+          <button className="btn secondary" onClick={exportPnl} disabled={!stats}>⬇ Export P&L</button>
+          <button className="btn" onClick={openNew}>+ Add expense</button>
+        </div>
       </div>
 
       {error && <div className="alert error">{error}</div>}

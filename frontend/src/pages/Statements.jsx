@@ -85,6 +85,7 @@ export default function Statements() {
                   <th style={{ textAlign: 'right' }}>Expenses</th>
                   <th style={{ textAlign: 'right' }}>Mgmt fee</th>
                   <th style={{ textAlign: 'right' }}>Net payout</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -97,6 +98,15 @@ export default function Statements() {
                     <td style={{ textAlign: 'right', fontWeight: 700, color: r.net >= 0 ? 'var(--success)' : 'var(--danger)' }}>
                       {money(r.net)}
                     </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        className="btn ghost sm"
+                        title="Copy shareable owner link"
+                        onClick={() => { try { navigator.clipboard.writeText(`${window.location.origin}/owner/${r.property_id}`); } catch { /* */ } }}
+                      >
+                        🔗 Owner link
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -107,6 +117,7 @@ export default function Statements() {
                   <td style={{ textAlign: 'right' }}>-{money(data.totals.expenses)}</td>
                   <td style={{ textAlign: 'right' }}>-{money(data.totals.mgmtFee)}</td>
                   <td style={{ textAlign: 'right', color: 'var(--success)' }}>{money(data.totals.net)}</td>
+                  <td></td>
                 </tr>
               </tfoot>
             </table>

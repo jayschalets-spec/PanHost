@@ -2526,6 +2526,48 @@ app.get(
   })
 );
 
+// Public: per-property monthly owner statement (shareable read-only link).
+app.get(
+  '/api/public/owner-statement/:propertyId',
+  wrap(async (req, res) => {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
+    const prop = (await query(
+      `SELECT p.id, p.name, p.city, p.country, u.brand_name, u.company, u.brand_color, u.mgmt_fee_pct
+         FROM properties p JOIN users u ON u.id = p.user_id WHERE p.id = $1`,
+      [req.params.propertyId]
+    )).rows[0];
+    if (!prop) return res.status(404).json({ error: 'Statement not found' });
+    const feePct = Number(prop.mgmt_fee_pct || 0);
+
+    const inMonth = (col) => `to_char(${col}, 'YYYY-MM') = $2`;
+    const gross = Number((await query(
+      `SELECT COALESCE(SUM(total_amount),0)::float AS t FROM bookings WHERE property_id = $1 AND status <> 'cancelled' AND ${inMonth('check_in')}`,
+      [prop.id, month]
+    )).rows[0].t);
+    const expRows = (await query(
+      `SELECT category, COALESCE(SUM(amount),0)::float AS t FROM expenses WHERE property_id = $1 AND ${inMonth('spent_on')} GROUP BY category`,
+      [prop.id, month]
+    )).rows;
+    const expenses = expRows.reduce((s, r) => s + Number(r.t), 0);
+    const mgmtFee = Math.round((gross * feePct) / 100 * 100) / 100;
+    const net = Math.round((gross - expenses - mgmtFee) * 100) / 100;
+
+    res.json({
+      property: prop.name,
+      location: [prop.city, prop.country].filter(Boolean).join(', '),
+      brand: prop.brand_name || prop.company || 'PanHost',
+      brand_color: prop.brand_color,
+      month,
+      feePct,
+      gross: Math.round(gross * 100) / 100,
+      expenses: Math.round(expenses * 100) / 100,
+      expenseBreakdown: expRows.map((r) => ({ category: r.category, amount: Math.round(Number(r.t) * 100) / 100 })),
+      mgmtFee,
+      net,
+    });
+  })
+);
+
 // Public: guest submits a review from an emailed link.
 app.get(
   '/api/public/review/:bookingId',
