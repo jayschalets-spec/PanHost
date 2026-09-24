@@ -11,7 +11,10 @@ function nthMonday(year, month, n) {
 
 function mondayBefore(year, month, day) {
   const d = new Date(year, month, day);
-  const back = (d.getDay() + 6) % 7; // days since last Monday
+  // Days since the last Monday; when the date IS a Monday we still want the
+  // *preceding* one (Victoria Day is the Monday before May 25, so if May 25 is
+  // itself a Monday the holiday is May 18 — not May 25).
+  const back = (d.getDay() + 6) % 7 || 7;
   return new Date(year, month, day - back);
 }
 

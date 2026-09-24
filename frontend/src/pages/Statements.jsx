@@ -102,7 +102,7 @@ export default function Statements() {
                       <button
                         className="btn ghost sm"
                         title="Copy shareable owner link"
-                        onClick={() => { try { navigator.clipboard.writeText(`${window.location.origin}/owner/${r.property_id}`); } catch { /* */ } }}
+                        onClick={() => { try { navigator.clipboard.writeText(`${window.location.origin}/owner/${r.property_id}?t=${r.statement_token}`); } catch { /* */ } }}
                       >
                         🔗 Owner link
                       </button>

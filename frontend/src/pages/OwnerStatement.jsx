@@ -1,23 +1,25 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import api, { apiError } from '../api';
 import { money } from '../components/ui.jsx';
 
 export default function OwnerStatement() {
   const { propertyId } = useParams();
+  const [search] = useSearchParams();
+  const token = search.get('t') || '';
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [d, setD] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     api
-      .get(`/api/public/owner-statement/${propertyId}?month=${month}`)
+      .get(`/api/public/owner-statement/${propertyId}?month=${month}&t=${encodeURIComponent(token)}`)
       .then((r) => {
         setD(r.data);
         if (r.data.brand_color) document.documentElement.style.setProperty('--primary', r.data.brand_color);
       })
       .catch((e) => setError(apiError(e)));
-  }, [propertyId, month]);
+  }, [propertyId, month, token]);
 
   if (error) return <div className="auth-wrap"><div className="auth-card"><div className="alert error">{error}</div></div></div>;
   if (!d) return <div className="loading"><div className="spinner" /></div>;

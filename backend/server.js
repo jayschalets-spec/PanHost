@@ -19,8 +19,11 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
-if (JWT_SECRET === 'dev-secret-change-me' && process.env.NODE_ENV === 'production') {
-  console.warn('[server] WARNING: JWT_SECRET is using the insecure default in production.');
+// Fail closed: the fallback secret is public (it's in this repo), so booting with it
+// in production would let anyone mint a valid token for any account.
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16)) {
+  console.error('[server] FATAL: set JWT_SECRET to a long random value before starting in production.');
+  process.exit(1);
 }
 
 app.use(cors());
@@ -66,6 +69,25 @@ function auth(req, res, next) {
 function ownerOnly(req, res, next) {
   if (req.user.owner_id) return res.status(403).json({ error: 'Owner access required' });
   next();
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// True when this property belongs to the account. Any endpoint that accepts a
+// caller-supplied property_id must check this — rows are keyed by property_id in
+// the public statement/iCal views, so an unchecked id lets one tenant write onto
+// another tenant's listing.
+async function ownsProperty(propertyId, accountId) {
+  if (!propertyId || !UUID_RE.test(String(propertyId))) return false;
+  const { rows } = await query('SELECT id FROM properties WHERE id = $1 AND user_id = $2', [propertyId, accountId]);
+  return rows.length > 0;
+}
+
+// Unguessable capability token for the shareable owner-statement link. The property
+// UUID alone can't gate financials: it is handed to every guest in the guidebook link
+// and to the OTAs in the iCal feed.
+function statementToken(propertyId) {
+  return crypto.createHmac('sha256', JWT_SECRET).update(`stmt:${propertyId}`).digest('hex').slice(0, 32);
 }
 
 // Wrap async route handlers so rejections become 500s instead of crashing.
@@ -1222,6 +1244,9 @@ app.post(
         .status(400)
         .json({ error: `category must be one of: ${EXPENSE_CATEGORIES.join(', ')}` });
     }
+    if (property_id && !(await ownsProperty(property_id, req.accountId))) {
+      return res.status(400).json({ error: 'Unknown property' });
+    }
     const { rows } = await query(
       `INSERT INTO expenses (user_id, property_id, category, description, amount, spent_on, receipt_url)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
@@ -1636,11 +1661,15 @@ app.post(
     if (!tm.email) return res.status(400).json({ error: 'Add an email to this team member first' });
 
     const existing = (await query('SELECT id, owner_id, invite_status FROM users WHERE email = $1', [tm.email.toLowerCase()])).rows[0];
-    if (existing && existing.invite_status === 'active') {
-      return res.status(409).json({ error: 'That email already has an active login' });
-    }
-    if (existing && existing.owner_id && existing.owner_id !== req.accountId) {
-      return res.status(409).json({ error: 'That email belongs to another account' });
+    // Only a still-pending invite that already belongs to THIS account may be re-issued.
+    // Anything else (an independent owner with owner_id NULL, an active login, or staff
+    // of another account) must never be absorbed into this tenant — doing so would
+    // reassign someone else's account and let us overwrite their password.
+    if (existing) {
+      const reissuable = existing.owner_id === req.accountId && existing.invite_status === 'pending';
+      if (!reissuable) {
+        return res.status(409).json({ error: 'That email already has a PanHost account' });
+      }
     }
 
     const token = crypto.randomBytes(24).toString('hex');
@@ -2360,6 +2389,7 @@ app.get(
       return {
         property_id: p.id,
         property: p.name,
+        statement_token: statementToken(p.id),
         gross: Math.round(gross * 100) / 100,
         expenses: Math.round(exp * 100) / 100,
         mgmtFee: Math.round(mgmtFee * 100) / 100,
@@ -2436,6 +2466,16 @@ app.post(
 
     // Attach to a named property, else the first one.
     let propId = pick('property_id');
+    if (propId) {
+      // A caller-supplied property_id must belong to THIS account: otherwise a token
+      // holder could inject bookings onto someone else's listing, blocking their real
+      // availability via the public iCal feed and skewing their owner statement.
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(propId));
+      const owned = isUuid
+        ? await query('SELECT id FROM properties WHERE id = $1 AND user_id = $2', [propId, userId])
+        : { rows: [] };
+      if (!owned.rows.length) return res.status(400).json({ error: 'Unknown property for this account' });
+    }
     if (!propId) {
       const propName = pick('property', 'property_name', 'listing');
       if (propName) {
@@ -2546,6 +2586,13 @@ app.get(
 app.get(
   '/api/public/owner-statement/:propertyId',
   wrap(async (req, res) => {
+    // Requires the capability token — the bare property UUID is public (guidebook + iCal).
+    const expected = statementToken(req.params.propertyId);
+    const supplied = String(req.query.t || '');
+    if (supplied.length !== expected.length ||
+        !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {
+      return res.status(404).json({ error: 'Statement not found' });
+    }
     const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date().toISOString().slice(0, 7);
     const prop = (await query(
       `SELECT p.id, p.name, p.city, p.country, u.brand_name, u.company, u.brand_color, u.mgmt_fee_pct
