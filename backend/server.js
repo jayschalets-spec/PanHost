@@ -12,6 +12,7 @@ import { fetchListingViaStayingApi, fetchAvailabilityViaStayingApi, searchMarket
 import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
 import { sendEmail, emailTemplate, emailConfigured } from './email.js';
 import { seasonalityFactor } from './seasonality.js';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
@@ -28,6 +29,28 @@ if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process
 
 app.use(cors());
 app.use(express.json());
+
+// Rate limiting. Render runs behind a proxy, so trust it for correct client IPs.
+app.set('trust proxy', 1);
+
+// Brute-force guard for credential endpoints.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Too many attempts. Please try again in a few minutes.' },
+});
+
+// Abuse guard for unauthenticated public writes (booking requests, reviews).
+const publicWriteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please try again later.' },
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -70,6 +93,24 @@ function ownerOnly(req, res, next) {
   if (req.user.owner_id) return res.status(403).json({ error: 'Owner access required' });
   next();
 }
+
+// Role tiers for invited staff. Owners always rank highest; an invited member's
+// rank comes from their role. Cleaners/maintenance are deliberately read-mostly:
+// before this, any invited staff could delete listings and edit invoices.
+const ROLE_RANK = { owner: 3, 'co-host': 2, maintenance: 1, cleaner: 1 };
+
+function minRole(rank) {
+  return function (req, res, next) {
+    const role = req.user.owner_id ? req.user.role || 'cleaner' : 'owner';
+    if ((ROLE_RANK[role] || 0) < rank) {
+      return res.status(403).json({ error: 'Insufficient permissions for this action' });
+    }
+    next();
+  };
+}
+
+// Co-host or owner: day-to-day operational writes.
+const coHostPlus = minRole(2);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -122,13 +163,14 @@ app.get('/api/health', (req, res) => {
 // ---------------------------------------------------------------------------
 app.post(
   '/api/auth/register',
+  authLimiter,
   wrap(async (req, res) => {
     const { email, password, name } = req.body || {};
     if (!email || !password) {
       return res.status(400).json({ error: 'email and password are required' });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'password must be at least 6 characters' });
+    if (password.length < 10) {
+      return res.status(400).json({ error: 'password must be at least 10 characters' });
     }
     const existing = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
     if (existing.rows.length) {
@@ -160,6 +202,7 @@ app.post(
 
 app.post(
   '/api/auth/login',
+  authLimiter,
   wrap(async (req, res) => {
     const { email, password } = req.body || {};
     if (!email || !password) {
@@ -293,6 +336,7 @@ app.post(
 app.put(
   '/api/properties/:id',
   auth,
+  coHostPlus,
   wrap(async (req, res) => {
     const fields = [
       'name',
@@ -354,6 +398,7 @@ app.put(
 app.delete(
   '/api/properties/:id',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM properties WHERE id = $1 AND user_id = $2', [
       req.params.id,
@@ -484,6 +529,7 @@ app.put(
 app.delete(
   '/api/bookings/:id',
   auth,
+  coHostPlus,
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM bookings WHERE id = $1 AND user_id = $2', [
       req.params.id,
@@ -498,6 +544,7 @@ app.delete(
 app.post(
   '/api/bookings/:id/lockcode',
   auth,
+  coHostPlus,
   wrap(async (req, res) => {
     const code = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
     const { rows } = await query(
@@ -1234,6 +1281,7 @@ app.get(
 app.post(
   '/api/expenses',
   auth,
+  coHostPlus,
   wrap(async (req, res) => {
     const { property_id, category, description, amount, spent_on, receipt_url } = req.body || {};
     if (!category || amount === undefined) {
@@ -1267,6 +1315,7 @@ app.post(
 app.delete(
   '/api/expenses/:id',
   auth,
+  coHostPlus,
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM expenses WHERE id = $1 AND user_id = $2', [
       req.params.id,
@@ -1587,6 +1636,7 @@ app.get(
 app.post(
   '/api/team',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { name, email, phone, role } = req.body || {};
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -1618,6 +1668,7 @@ app.post(
 app.put(
   '/api/team/:id',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const fields = ['name', 'email', 'phone', 'role'];
     const sets = [];
@@ -1643,6 +1694,7 @@ app.put(
 app.delete(
   '/api/team/:id',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM team_members WHERE id = $1 AND user_id = $2', [req.params.id, req.accountId]);
     if (!rowCount) return res.status(404).json({ error: 'Team member not found' });
@@ -1717,10 +1769,11 @@ app.get(
 // Public: accept an invite — set password and activate the login.
 app.post(
   '/api/auth/accept-invite',
+  authLimiter,
   wrap(async (req, res) => {
     const { token, password } = req.body || {};
     if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
-    if (password.length < 6) return res.status(400).json({ error: 'password must be at least 6 characters' });
+    if (password.length < 10) return res.status(400).json({ error: 'password must be at least 10 characters' });
     const u = (await query("SELECT * FROM users WHERE invite_token = $1 AND invite_status = 'pending'", [token])).rows[0];
     if (!u) return res.status(404).json({ error: 'Invite not found or already used' });
     const hash = await bcrypt.hash(password, 10);
@@ -2257,6 +2310,7 @@ async function nextInvoiceNumber(userId) {
 app.post(
   '/api/invoices',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { property_id, booking_id, guest_name, amount, due_date, notes } = req.body || {};
     if (amount === undefined) return res.status(400).json({ error: 'amount is required' });
@@ -2273,6 +2327,7 @@ app.post(
 app.put(
   '/api/invoices/:id',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const fields = ['guest_name', 'amount', 'status', 'due_date', 'paid_on', 'payment_url', 'notes'];
     const sets = [];
@@ -2303,6 +2358,7 @@ app.put(
 app.delete(
   '/api/invoices/:id',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { rowCount } = await query('DELETE FROM invoices WHERE id = $1 AND user_id = $2', [
       req.params.id,
@@ -2317,6 +2373,7 @@ app.delete(
 app.post(
   '/api/invoices/generate',
   auth,
+  ownerOnly,
   wrap(async (req, res) => {
     const { rows: bookings } = await query(
       `SELECT b.id, b.property_id, b.guest_name, b.total_amount, b.check_in
@@ -2530,6 +2587,7 @@ app.get(
 
 app.post(
   '/api/public/bookings',
+  publicWriteLimiter,
   wrap(async (req, res) => {
     const { host_id, property_id, guest_name, guest_email, check_in, check_out, guests, message } =
       req.body || {};
@@ -2655,6 +2713,7 @@ app.get(
 
 app.post(
   '/api/public/review/:bookingId',
+  publicWriteLimiter,
   wrap(async (req, res) => {
     const { rating, body } = req.body || {};
     const b = (await query('SELECT id, user_id, property_id, guest_name, platform FROM bookings b WHERE b.id = $1', [req.params.bookingId])).rows[0];
