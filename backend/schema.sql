@@ -306,3 +306,6 @@ CREATE TABLE IF NOT EXISTS email_log (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_email_log_user ON email_log(user_id);
+
+-- Invoice numbers must be unique per account: a duplicate number is an accounting defect.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_invoice_number ON invoices(user_id, number);

@@ -1202,7 +1202,8 @@ async function refreshMarketMedian(prop) {
   if (!stayingApiConfigured()) return null;
   const location = prop.address ? `${prop.address}, ${prop.city || ''}` : [prop.city, prop.country].filter(Boolean).join(', ');
   if (!location.trim()) return null;
-  const comps = await searchMarket({ location, limit: 40 });
+  // 12 is enough for a stable median and keeps credit burn low (search bills per result).
+  const comps = await searchMarket({ location, limit: 12 });
   const priced = comps.filter((c) => c.nightly != null && c.nightly > 0);
   const comparable = prop.bedrooms
     ? priced.filter((c) => c.bedrooms == null || Math.abs(c.bedrooms - prop.bedrooms) <= 1)
@@ -1243,7 +1244,7 @@ app.get(
         checkIn: req.query.checkin,
         checkOut: req.query.checkout,
         adults: req.query.adults ? Number(req.query.adults) : undefined,
-        limit: 40,
+        limit: 20,
       });
 
       // Add proximity distance when we know our coords; sort by nearest else by price.
@@ -1966,7 +1967,9 @@ async function scheduledMarketSweep() {
   if (!stayingApiConfigured()) return;
   try {
     const props = (await query(
-      'SELECT id, address, city, country, bedrooms FROM properties WHERE market_anchor = true'
+      `SELECT id, address, city, country, bedrooms FROM properties
+        WHERE market_anchor = true
+          AND (market_updated_at IS NULL OR market_updated_at < now() - interval '6 days')`
     )).rows;
     let ok = 0;
     for (const p of props) {
@@ -2347,10 +2350,22 @@ app.get(
   })
 );
 
+// Highest invoice sequence already issued for this account, read from the numbers
+// themselves rather than COUNT(*). Counting is wrong: delete an invoice and the count
+// drops, so the next invoice reuses a number that has already gone out to someone.
+async function maxInvoiceSeq(userId) {
+  const { rows } = await query(
+    `SELECT COALESCE(MAX(NULLIF(split_part(number, '-', 2), '')::bigint), 0) AS n
+       FROM invoices WHERE user_id = $1`,
+    [userId]
+  );
+  return Number(rows[0].n || 0);
+}
+
+const formatInvoiceNumber = (seq) => `INV-${String(seq).padStart(4, '0')}`;
+
 async function nextInvoiceNumber(userId) {
-  const { rows } = await query('SELECT COUNT(*)::int AS n FROM invoices WHERE user_id = $1', [userId]);
-  const seq = (rows[0].n || 0) + 1;
-  return `INV-${String(seq).padStart(4, '0')}`;
+  return formatInvoiceNumber((await maxInvoiceSeq(userId)) + 1);
 }
 
 app.post(
@@ -2429,11 +2444,10 @@ app.post(
       [req.accountId]
     );
     let created = 0;
-    let seq = (await query('SELECT COUNT(*)::int AS n FROM invoices WHERE user_id = $1', [req.accountId]))
-      .rows[0].n;
+    let seq = await maxInvoiceSeq(req.accountId);
     for (const b of bookings) {
       seq += 1;
-      await query(
+      const ins = await query(
         `INSERT INTO invoices (user_id, property_id, booking_id, number, guest_name, amount, due_date, status)
          VALUES ($1,$2,$3,$4,$5,$6,$7,'unpaid')
          ON CONFLICT (user_id, booking_id) WHERE booking_id IS NOT NULL DO NOTHING`,
@@ -2441,13 +2455,16 @@ app.post(
           req.accountId,
           b.property_id,
           b.id,
-          `INV-${String(seq).padStart(4, '0')}`,
+          formatInvoiceNumber(seq),
           b.guest_name,
           b.total_amount,
           b.check_in,
         ]
       );
-      created += 1;
+      // The insert can be skipped by ON CONFLICT; don't count it, and don't consume
+      // the number either, or the sequence grows gaps on every re-run.
+      if (ins.rowCount > 0) created += 1;
+      else seq -= 1;
     }
     res.json({ created });
   })
