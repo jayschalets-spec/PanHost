@@ -366,6 +366,100 @@ function EmailCard() {
   );
 }
 
+
+// Your data — the access and deletion rights the Privacy Policy promises, self-serve.
+function DataRightsCard() {
+  const { logout } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [openDelete, setOpenDelete] = useState(false);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+
+  const exportData = async () => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const { data } = await api.get('/api/account/export');
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `panhost-data-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMsg('Your data has been downloaded.');
+    } catch (e) {
+      setErr(apiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteAccount = async () => {
+    setBusy(true); setErr('');
+    try {
+      await api.delete('/api/account', { data: { password, confirm } });
+      logout();
+      window.location.href = '/login';
+    } catch (e) {
+      setErr(apiError(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card-header"><h3>🔐 Your data</h3></div>
+      <div className="card-body">
+        {msg && <div className="alert success">{msg}</div>}
+        {err && <div className="alert error">{err}</div>}
+
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          You can take a copy of everything we hold for your account at any time, or delete the
+          account entirely. See our <a href="/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.
+        </p>
+
+        <button className="btn secondary" onClick={exportData} disabled={busy}>
+          {busy ? 'Working…' : '⬇ Export my data (JSON)'}
+        </button>
+
+        <hr style={{ margin: '22px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+
+        <h4 style={{ margin: '0 0 6px', color: 'var(--danger)' }}>Delete this account</h4>
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          Permanently removes your account and <strong>every listing, reservation, invoice, message
+          and staff login under it</strong>. This cannot be undone. Export your data first if you
+          want a copy.
+        </p>
+
+        {!openDelete ? (
+          <button className="btn danger" onClick={() => setOpenDelete(true)}>Delete my account…</button>
+        ) : (
+          <div style={{ border: '1px solid var(--danger)', borderRadius: 10, padding: 16 }}>
+            <div className="field">
+              <label>Your password</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+            </div>
+            <div className="field">
+              <label>Type <code>DELETE</code> to confirm</label>
+              <input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="DELETE" />
+            </div>
+            <div className="row" style={{ gap: 10 }}>
+              <button className="btn danger" onClick={deleteAccount} disabled={busy || confirm !== 'DELETE' || !password}>
+                {busy ? 'Deleting…' : 'Permanently delete'}
+              </button>
+              <button className="btn secondary" onClick={() => { setOpenDelete(false); setPassword(''); setConfirm(''); setErr(''); }} disabled={busy}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
   const [creds, setCreds] = useState([]);
@@ -430,6 +524,8 @@ export default function Settings() {
       <WebhookCard />
 
       <IcalSyncCard />
+
+      <DataRightsCard />
 
       <div className="alert info">
         Airbnb and VRBO require partner API access. Once you paste real credentials and set

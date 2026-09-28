@@ -62,6 +62,10 @@ function Shell({ children }) {
   const [open, setOpen] = useState(false);
   const title = PAGE_TITLES[location.pathname] || 'Property Manager';
   const isHome = location.pathname === '/';
+  // React Router stamps an index onto each history entry. At 0 there is nothing of
+  // ours behind us, so "Back" would leave the app — hide it rather than offer a
+  // button that goes nowhere useful. Re-read on every render: location drives it.
+  const canGoBack = (window.history.state?.idx ?? 0) > 0;
   return (
     <div className="app-shell">
       <Sidebar open={open} onClose={() => setOpen(false)} />
@@ -72,13 +76,15 @@ function Shell({ children }) {
             <button className="menu-toggle" onClick={() => setOpen(true)}>
               ☰
             </button>
-            <button
-              className="btn secondary sm nav-btn"
-              onClick={() => navigate(-1)}
-              title="Go back"
-            >
-              ← Back
-            </button>
+            {canGoBack && (
+              <button
+                className="btn secondary sm nav-btn"
+                onClick={() => navigate(-1)}
+                title="Go back"
+              >
+                ← Back
+              </button>
+            )}
             {!isHome && (
               <Link to="/" className="btn secondary sm nav-btn" title="Go to dashboard">
                 🏠 Home

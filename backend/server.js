@@ -2532,6 +2532,84 @@ app.get(
 );
 
 // ---------------------------------------------------------------------------
+// Account data rights (PIPEDA): export everything, or delete the account
+// ---------------------------------------------------------------------------
+
+// Everything we hold for this account, in one JSON document. Secrets are withheld:
+// a password hash is not useful to the person and a channel token is a live credential.
+app.get(
+  '/api/account/export',
+  auth,
+  ownerOnly,
+  wrap(async (req, res) => {
+    const id = req.accountId;
+    const one = async (sql, params) => (await query(sql, params)).rows;
+
+    const account = await one(
+      `SELECT id, email, name, company, brand_name, brand_color, mgmt_fee_pct, currency,
+              role, date_of_birth, terms_accepted_at, terms_version, privacy_version, created_at
+         FROM users WHERE id = $1`,
+      [id]
+    );
+    const staff = await one(
+      `SELECT id, email, name, role, invite_status, created_at FROM users WHERE owner_id = $1`,
+      [id]
+    );
+    const byUser = (table, cols = '*') => one(`SELECT ${cols} FROM ${table} WHERE user_id = $1`, [id]);
+
+    res.json({
+      exported_at: new Date().toISOString(),
+      note: 'Your PanHost data. Password hashes and channel access tokens are deliberately excluded.',
+      account: account[0] || null,
+      staff_logins: staff,
+      properties: await byUser('properties'),
+      bookings: await byUser('bookings'),
+      messages: await byUser('messages'),
+      pricing_rules: await byUser('pricing_rules'),
+      expenses: await byUser('expenses'),
+      message_templates: await byUser('message_templates'),
+      tasks: await byUser('tasks'),
+      invoices: await byUser('invoices'),
+      reviews: await byUser('reviews'),
+      team_members: await byUser('team_members'),
+      channel_connections: await byUser('api_credentials', 'id, platform, property_ref, created_at'),
+      email_log: await byUser('email_log', 'id, recipient, subject, status, created_at'),
+    });
+  })
+);
+
+// Permanent account deletion. Requires the account password, because this cannot be
+// undone: every property, booking, invoice and staff login under it goes with it.
+app.delete(
+  '/api/account',
+  auth,
+  ownerOnly,
+  wrap(async (req, res) => {
+    const { password, confirm } = req.body || {};
+    if (confirm !== 'DELETE') {
+      return res.status(400).json({ error: 'Type DELETE to confirm' });
+    }
+    if (!password) return res.status(400).json({ error: 'Your password is required' });
+
+    const row = (await query('SELECT password_hash FROM users WHERE id = $1', [req.accountId])).rows[0];
+    if (!row || !row.password_hash) return res.status(404).json({ error: 'Account not found' });
+    if (!(await bcrypt.compare(password, row.password_hash))) {
+      return res.status(401).json({ error: 'Password is incorrect' });
+    }
+
+    // email_log is ON DELETE SET NULL, so it would outlive the account — clear it first.
+    await query('DELETE FROM email_log WHERE user_id = $1', [req.accountId]);
+    // Staff rows point at the owner by owner_id, which carries no FK, so remove them too.
+    await query('DELETE FROM users WHERE owner_id = $1', [req.accountId]);
+    // Everything else cascades from the owner row.
+    await query('DELETE FROM users WHERE id = $1', [req.accountId]);
+
+    console.log(`[account] deleted account ${req.accountId}`);
+    res.json({ deleted: true });
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Inbound webhook — Zapier / Make / email-parser → reservations
 // ---------------------------------------------------------------------------
 app.get(
