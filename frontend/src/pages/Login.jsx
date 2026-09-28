@@ -62,6 +62,9 @@ export default function Login() {
           </button>
         </form>
         <p className="auth-switch" style={{ marginBottom: 6 }}>
+          <Link to="/forgot-password">Forgot your password?</Link>
+        </p>
+        <p className="auth-switch" style={{ marginTop: 2 }}>
           No account? <Link to="/register">Create one</Link>
         </p>
         <p className="muted" style={{ fontSize: 12, textAlign: 'center', marginTop: 2 }}>

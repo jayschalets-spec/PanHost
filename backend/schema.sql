@@ -41,6 +41,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_version TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_from_ip TEXT;
+-- Token revocation: every JWT carries the version it was signed under, so bumping
+-- this invalidates every outstanding session for the user at once.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;
+-- Password reset. Only the HASH of the reset token is stored, so a database leak
+-- does not hand someone the ability to reset accounts.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_expires TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
 -- properties

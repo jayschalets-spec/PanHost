@@ -106,25 +106,49 @@ const EXPENSE_CATEGORIES = [
 
 function signToken(user) {
   return jwt.sign(
-    { id: user.id, email: user.email, owner_id: user.owner_id || null, role: user.role || 'owner' },
+    {
+      id: user.id,
+      email: user.email,
+      owner_id: user.owner_id || null,
+      role: user.role || 'owner',
+      tv: user.token_version ?? 0,
+    },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
 }
 
-function auth(req, res, next) {
+async function auth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Missing authorization token' });
+
+  let decoded;
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    // All account data is scoped to the owner. Staff act within their owner's account.
-    req.accountId = req.user.owner_id || req.user.id;
-    req.role = req.user.role || 'owner';
-    next();
+    decoded = jwt.verify(token, JWT_SECRET);
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+
+  try {
+    // A JWT alone is not enough: check the account still exists and the token has not
+    // been revoked. This is what makes "sign out everywhere" and password reset really
+    // end a session, and it stops a deleted account's token working until it expires.
+    const row = (await query('SELECT token_version FROM users WHERE id = $1', [decoded.id])).rows[0];
+    if (!row) return res.status(401).json({ error: 'Account no longer exists' });
+    if ((row.token_version || 0) !== (decoded.tv || 0)) {
+      return res.status(401).json({ error: 'Session ended. Please sign in again.' });
+    }
+  } catch (err) {
+    console.error('[auth]', err.message);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+
+  req.user = decoded;
+  // All account data is scoped to the owner. Staff act within their owner's account.
+  req.accountId = decoded.owner_id || decoded.id;
+  req.role = decoded.role || 'owner';
+  next();
 }
 
 // Restrict a route to account owners (not staff).
@@ -294,7 +318,7 @@ app.post(
        VALUES ($1,$2,$3,$4, now(), $5, $6, $7) RETURNING id, email, name`,
       [email.toLowerCase(), hash, name || null, date_of_birth, TERMS_VERSION, PRIVACY_VERSION, clientIp(req)]
     );
-    const user = rows[0];
+    const user = { ...rows[0], token_version: 0 };
     // Welcome email (sends when SMTP configured; otherwise logged).
     sendEmail({
       userId: user.id,
@@ -322,14 +346,19 @@ app.post(
       return res.status(400).json({ error: 'email and password are required' });
     }
     const { rows } = await query(
-      'SELECT id, email, name, password_hash, owner_id, role FROM users WHERE email = $1',
+      'SELECT id, email, name, password_hash, owner_id, role, token_version FROM users WHERE email = $1',
       [email.toLowerCase()]
     );
     const user = rows[0];
     if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-    const safe = { id: user.id, email: user.email, name: user.name, owner_id: user.owner_id, role: user.role };
+    // token_version must ride along, or the minted token will not match the account
+    // and the user is locked out the moment they have ever signed out everywhere.
+    const safe = {
+      id: user.id, email: user.email, name: user.name,
+      owner_id: user.owner_id, role: user.role, token_version: user.token_version ?? 0,
+    };
     res.json({ token: signToken(safe), user: safe });
   })
 );
@@ -1902,8 +1931,111 @@ app.post(
        WHERE id = $6`,
       [hash, date_of_birth, TERMS_VERSION, PRIVACY_VERSION, clientIp(req), u.id]
     );
-    const safe = { id: u.id, email: u.email, name: u.name, owner_id: u.owner_id, role: u.role };
+    const safe = {
+      id: u.id, email: u.email, name: u.name,
+      owner_id: u.owner_id, role: u.role, token_version: u.token_version ?? 0,
+    };
     res.json({ token: signToken(safe), user: safe });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Password reset + session revocation
+// ---------------------------------------------------------------------------
+
+const hashResetToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+
+// Always answers 200, whether or not the address exists. Saying "no such account"
+// would turn this endpoint into a way to discover who has one.
+app.post(
+  '/api/auth/forgot-password',
+  authLimiter,
+  wrap(async (req, res) => {
+    const { email } = req.body || {};
+    const done = { ok: true, message: 'If that email has an account, a reset link is on its way.' };
+    if (!email) return res.json(done);
+
+    const u = (await query(
+      'SELECT id, email, name, password_hash FROM users WHERE email = $1',
+      [String(email).toLowerCase()]
+    )).rows[0];
+    // Pending invites have no password yet — they finish through the invite link instead.
+    if (!u || !u.password_hash) return res.json(done);
+
+    const raw = crypto.randomBytes(32).toString('hex');
+    await query(
+      "UPDATE users SET reset_token_hash = $1, reset_expires = now() + interval '1 hour' WHERE id = $2",
+      [hashResetToken(raw), u.id]
+    );
+
+    const link = `${process.env.PUBLIC_URL || 'http://localhost:3000'}/reset-password?token=${raw}`;
+    await sendEmail({
+      userId: u.id,
+      to: u.email,
+      subject: 'Reset your PanHost password',
+      html: emailTemplate({
+        heading: 'Reset your password',
+        lines: [
+          `Someone asked to reset the password for <strong>${u.email}</strong>.`,
+          'This link works once and expires in one hour. If it was not you, ignore this email — nothing has changed.',
+        ],
+        cta: { label: 'Choose a new password', url: link },
+      }),
+    });
+    res.json(done);
+  })
+);
+
+app.post(
+  '/api/auth/reset-password',
+  authLimiter,
+  wrap(async (req, res) => {
+    const { token, password } = req.body || {};
+    if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
+    if (password.length < 10) return res.status(400).json({ error: 'password must be at least 10 characters' });
+
+    const u = (await query(
+      'SELECT id, email, name, owner_id, role, token_version FROM users WHERE reset_token_hash = $1 AND reset_expires > now()',
+      [hashResetToken(token)]
+    )).rows[0];
+    if (!u) return res.status(400).json({ error: 'That reset link is invalid or has expired. Request a new one.' });
+
+    const hash = await bcrypt.hash(password, 10);
+    // Bump the token version: changing a password must end every existing session,
+    // including whoever may have had the old one.
+    const updated = (await query(
+      `UPDATE users
+          SET password_hash = $1, reset_token_hash = NULL, reset_expires = NULL,
+              token_version = COALESCE(token_version, 0) + 1
+        WHERE id = $2
+        RETURNING id, email, name, owner_id, role, token_version`,
+      [hash, u.id]
+    )).rows[0];
+
+    sendEmail({
+      userId: updated.id,
+      to: updated.email,
+      subject: 'Your PanHost password was changed',
+      html: emailTemplate({
+        heading: 'Password changed',
+        lines: [
+          'The password for your PanHost account was just changed, and you have been signed out everywhere.',
+          'If this was not you, reset your password immediately and contact us.',
+        ],
+      }),
+    });
+
+    res.json({ token: signToken(updated), user: updated });
+  })
+);
+
+// Ends every session for this account, on every device.
+app.post(
+  '/api/auth/logout-all',
+  auth,
+  wrap(async (req, res) => {
+    await query('UPDATE users SET token_version = COALESCE(token_version, 0) + 1 WHERE id = $1', [req.user.id]);
+    res.json({ ok: true });
   })
 );
 

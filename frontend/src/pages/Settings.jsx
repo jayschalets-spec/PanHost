@@ -396,6 +396,18 @@ function DataRightsCard() {
     }
   };
 
+  const signOutEverywhere = async () => {
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      await api.post('/api/auth/logout-all');
+      logout();
+      window.location.href = '/login';
+    } catch (e) {
+      setErr(apiError(e));
+      setBusy(false);
+    }
+  };
+
   const deleteAccount = async () => {
     setBusy(true); setErr('');
     try {
@@ -420,9 +432,18 @@ function DataRightsCard() {
           account entirely. See our <a href="/privacy" target="_blank" rel="noreferrer">Privacy Policy</a>.
         </p>
 
-        <button className="btn secondary" onClick={exportData} disabled={busy}>
-          {busy ? 'Working…' : '⬇ Export my data (JSON)'}
-        </button>
+        <div className="row wrap" style={{ gap: 10 }}>
+          <button className="btn secondary" onClick={exportData} disabled={busy}>
+            {busy ? 'Working…' : '⬇ Export my data (JSON)'}
+          </button>
+          <button className="btn secondary" onClick={signOutEverywhere} disabled={busy}>
+            🔓 Sign out on all devices
+          </button>
+        </div>
+        <p className="muted" style={{ fontSize: 12 }}>
+          Signing out everywhere immediately invalidates every session, including any you
+          no longer have access to. You will need to sign in again here.
+        </p>
 
         <hr style={{ margin: '22px 0', border: 0, borderTop: '1px solid var(--border)' }} />
 
