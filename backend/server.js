@@ -13,6 +13,7 @@ import { integrationStatus, fetchReservationsViaApi } from './integrations.js';
 import { sendEmail, emailTemplate, emailConfigured } from './email.js';
 import { seasonalityFactor } from './seasonality.js';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 
 dotenv.config();
 
@@ -27,8 +28,46 @@ if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process
   process.exit(1);
 }
 
-app.use(cors());
-app.use(express.json());
+// Security headers. The API serves JSON, not HTML, so a restrictive CSP costs nothing;
+// HSTS matters because Render and Vercel both terminate TLS in front of us.
+app.use(
+  helmet({
+    contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
+    hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+    referrerPolicy: { policy: 'no-referrer' },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+// CORS: allow only our own front ends. Requests with no Origin (curl, server-to-server,
+// the OTAs fetching the iCal feed) are allowed through — CORS is a browser control and
+// blocking them would break calendar sync without adding security.
+const DEFAULT_ORIGINS = [
+  'https://panhost.ca',
+  'https://www.panhost.ca',
+  'https://panhost.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:5173',
+];
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean).concat(DEFAULT_ORIGINS)
+);
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.has(origin)) return cb(null, true);
+      // Any preview deployment of our own Vercel project.
+      if (/^https:\/\/panhost-[a-z0-9-]+\.vercel\.app$/.test(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+    credentials: false,
+    maxAge: 86400,
+  })
+);
+
+// Cap request bodies: without a limit a single large POST can tie up the instance.
+app.use(express.json({ limit: '1mb' }));
 
 // Rate limiting. Render runs behind a proxy, so trust it for correct client IPs.
 app.set('trust proxy', 1);
@@ -134,6 +173,44 @@ function ageFrom(dobString) {
 
 // Best-effort client IP, recorded as evidence of consent (trust proxy is set).
 const clientIp = (req) => (req.ip || req.socket?.remoteAddress || '').toString().slice(0, 64);
+
+// Channel access tokens are live credentials, so they are encrypted at rest with
+// AES-256-GCM rather than sitting in the clear in the database. The key is derived
+// from ENCRYPTION_KEY if set, otherwise from JWT_SECRET, so production needs no extra
+// configuration; rotating that secret invalidates stored tokens and they must be
+// re-entered, which is the correct trade for not storing them in plaintext.
+let _encKey = null;
+function encryptionKey() {
+  if (!_encKey) {
+    const raw = process.env.ENCRYPTION_KEY || JWT_SECRET;
+    _encKey = crypto.scryptSync(raw, 'panhost-credential-encryption-v1', 32);
+  }
+  return _encKey;
+}
+
+function encryptSecret(plain) {
+  if (plain == null || plain === '') return plain;
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
+  const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return ['v1', iv.toString('base64'), c.getAuthTag().toString('base64'), enc.toString('base64')].join(':');
+}
+
+// Returns null if the value cannot be decrypted (wrong key, tampering). Values stored
+// before encryption was introduced are returned as-is so existing connections keep working.
+function decryptSecret(stored) {
+  if (!stored) return stored;
+  const parts = String(stored).split(':');
+  if (parts[0] !== 'v1' || parts.length !== 4) return stored;
+  try {
+    const d = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(parts[1], 'base64'));
+    d.setAuthTag(Buffer.from(parts[2], 'base64'));
+    return Buffer.concat([d.update(Buffer.from(parts[3], 'base64')), d.final()]).toString('utf8');
+  } catch {
+    console.error('[crypto] stored credential could not be decrypted');
+    return null;
+  }
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -616,7 +693,7 @@ async function saveCredential(req, res, platform) {
      ON CONFLICT (user_id, platform)
      DO UPDATE SET property_ref = EXCLUDED.property_ref, access_token = EXCLUDED.access_token
      RETURNING platform, property_ref, created_at`,
-    [req.accountId, platform, property_ref || null, access_token]
+    [req.accountId, platform, property_ref || null, encryptSecret(access_token)]
   );
   res.json(rows[0]);
 }
@@ -640,7 +717,7 @@ async function fetchExternalBookings(platform, credential) {
 
   if (endpoint) {
     const { data } = await axios.get(endpoint, {
-      headers: { Authorization: `Bearer ${credential.access_token}` },
+      headers: { Authorization: `Bearer ${decryptSecret(credential.access_token)}` },
       params: { property: credential.property_ref },
       timeout: 15000,
     });
