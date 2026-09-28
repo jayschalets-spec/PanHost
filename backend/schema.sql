@@ -35,6 +35,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS brand_name TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS brand_color TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS mgmt_fee_pct NUMERIC(5,2) DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'USD';
+-- Age gate + clickwrap consent evidence (who accepted what, when, from where).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_version TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_from_ip TEXT;
 
 -- ---------------------------------------------------------------------------
 -- properties

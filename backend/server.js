@@ -112,6 +112,29 @@ function minRole(rank) {
 // Co-host or owner: day-to-day operational writes.
 const coHostPlus = minRole(2);
 
+// Versions of the public legal documents. Bump these when the text changes so we
+// can prove which version a given user actually accepted.
+export const TERMS_VERSION = '2026-09-28';
+export const PRIVACY_VERSION = '2026-09-28';
+const MIN_AGE = 18;
+
+// Whole years old on a given date. Returns null if the date is unusable.
+function ageFrom(dobString) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dobString || ''))) return null;
+  const [y, m, d] = String(dobString).split('-').map(Number);
+  const dob = new Date(y, m - 1, d);
+  if (dob.getFullYear() !== y || dob.getMonth() !== m - 1 || dob.getDate() !== d) return null;
+  const now = new Date();
+  if (dob > now) return null;
+  let age = now.getFullYear() - y;
+  const hadBirthday = now.getMonth() > m - 1 || (now.getMonth() === m - 1 && now.getDate() >= d);
+  if (!hadBirthday) age -= 1;
+  return age;
+}
+
+// Best-effort client IP, recorded as evidence of consent (trust proxy is set).
+const clientIp = (req) => (req.ip || req.socket?.remoteAddress || '').toString().slice(0, 64);
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // True when this property belongs to the account. Any endpoint that accepts a
@@ -165,12 +188,24 @@ app.post(
   '/api/auth/register',
   authLimiter,
   wrap(async (req, res) => {
-    const { email, password, name } = req.body || {};
+    const { email, password, name, date_of_birth, accept_terms } = req.body || {};
     if (!email || !password) {
       return res.status(400).json({ error: 'email and password are required' });
     }
     if (password.length < 10) {
       return res.status(400).json({ error: 'password must be at least 10 characters' });
+    }
+    // Age gate. Checked on the server so a tampered client cannot bypass it.
+    const age = ageFrom(date_of_birth);
+    if (age === null) {
+      return res.status(400).json({ error: 'A valid date of birth is required (YYYY-MM-DD)' });
+    }
+    if (age < MIN_AGE) {
+      return res.status(403).json({ error: `You must be at least ${MIN_AGE} years old to create an account` });
+    }
+    // Clickwrap: acceptance must be an affirmative act, and we record what was accepted.
+    if (accept_terms !== true) {
+      return res.status(400).json({ error: 'You must accept the Terms of Use and Privacy Policy to create an account' });
     }
     const existing = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
     if (existing.rows.length) {
@@ -178,8 +213,9 @@ app.post(
     }
     const hash = await bcrypt.hash(password, 10);
     const { rows } = await query(
-      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name',
-      [email.toLowerCase(), hash, name || null]
+      `INSERT INTO users (email, password_hash, name, date_of_birth, terms_accepted_at, terms_version, privacy_version, accepted_from_ip)
+       VALUES ($1,$2,$3,$4, now(), $5, $6, $7) RETURNING id, email, name`,
+      [email.toLowerCase(), hash, name || null, date_of_birth, TERMS_VERSION, PRIVACY_VERSION, clientIp(req)]
     );
     const user = rows[0];
     // Welcome email (sends when SMTP configured; otherwise logged).
@@ -1771,13 +1807,23 @@ app.post(
   '/api/auth/accept-invite',
   authLimiter,
   wrap(async (req, res) => {
-    const { token, password } = req.body || {};
+    const { token, password, date_of_birth, accept_terms } = req.body || {};
     if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
     if (password.length < 10) return res.status(400).json({ error: 'password must be at least 10 characters' });
+    // Staff logins are accounts too: same age gate and same clickwrap as registration.
+    const age = ageFrom(date_of_birth);
+    if (age === null) return res.status(400).json({ error: 'A valid date of birth is required (YYYY-MM-DD)' });
+    if (age < MIN_AGE) return res.status(403).json({ error: `You must be at least ${MIN_AGE} years old to use PanHost` });
+    if (accept_terms !== true) return res.status(400).json({ error: 'You must accept the Terms of Use and Privacy Policy' });
     const u = (await query("SELECT * FROM users WHERE invite_token = $1 AND invite_status = 'pending'", [token])).rows[0];
     if (!u) return res.status(404).json({ error: 'Invite not found or already used' });
     const hash = await bcrypt.hash(password, 10);
-    await query("UPDATE users SET password_hash = $1, invite_status = 'active', invite_token = NULL WHERE id = $2", [hash, u.id]);
+    await query(
+      `UPDATE users SET password_hash = $1, invite_status = 'active', invite_token = NULL,
+         date_of_birth = $2, terms_accepted_at = now(), terms_version = $3, privacy_version = $4, accepted_from_ip = $5
+       WHERE id = $6`,
+      [hash, date_of_birth, TERMS_VERSION, PRIVACY_VERSION, clientIp(req), u.id]
+    );
     const safe = { id: u.id, email: u.email, name: u.name, owner_id: u.owner_id, role: u.role };
     res.json({ token: signToken(safe), user: safe });
   })

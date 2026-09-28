@@ -61,8 +61,11 @@ export default function Login() {
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-        <p className="auth-switch">
+        <p className="auth-switch" style={{ marginBottom: 6 }}>
           No account? <Link to="/register">Create one</Link>
+        </p>
+        <p className="muted" style={{ fontSize: 12, textAlign: 'center', marginTop: 2 }}>
+          <Link to="/terms">Terms of Use</Link> · <Link to="/privacy">Privacy Policy</Link>
         </p>
       </div>
     </div>

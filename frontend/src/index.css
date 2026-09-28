@@ -1613,3 +1613,33 @@ tr:last-child td {
     padding: 0 16px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Public legal pages (Terms of Use, Privacy Policy)
+   --------------------------------------------------------------------------- */
+.legal-wrap {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 40px 16px 64px;
+}
+.legal-doc {
+  max-width: 760px;
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.legal-doc h1 { margin: 18px 0 4px; font-size: 28px; }
+.legal-doc h2 { margin: 30px 0 8px; font-size: 17px; }
+.legal-doc p { margin: 12px 0; }
+.legal-doc ul { margin: 12px 0; padding-left: 22px; }
+.legal-doc li { margin: 7px 0; }
+.legal-doc hr { margin: 32px 0 16px; border: 0; border-top: 1px solid var(--border); }
+.legal-doc a { color: var(--primary); }
+@media (max-width: 640px) {
+  .legal-doc { padding: 24px 18px; }
+  .legal-doc h1 { font-size: 23px; }
+}

@@ -30,6 +30,8 @@ import Trip from './pages/Trip.jsx';
 import AcceptInvite from './pages/AcceptInvite.jsx';
 import ReviewSubmit from './pages/ReviewSubmit.jsx';
 import OwnerStatement from './pages/OwnerStatement.jsx';
+import Terms from './pages/Terms.jsx';
+import Privacy from './pages/Privacy.jsx';
 import { useState } from 'react';
 
 const PAGE_TITLES = {
@@ -122,6 +124,8 @@ function Router() {
       <Route path="/guide/:propertyId" element={<Guide />} />
       <Route path="/trip/:bookingId" element={<Trip />} />
       <Route path="/accept-invite" element={<AcceptInvite />} />
+      <Route path="/terms" element={<Terms />} />
+      <Route path="/privacy" element={<Privacy />} />
       <Route path="/review/:bookingId" element={<ReviewSubmit />} />
       <Route path="/owner/:propertyId" element={<OwnerStatement />} />
       <Route
